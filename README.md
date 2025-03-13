@@ -16,11 +16,11 @@ chmod +x $INSTALL_PATH/ucgMLST/modules/*.py
 
 # step3. download our pre-build database (about 5.8 GB)
 # For Chinese users, please contact us for the download link if you were unable to access Google Drive
-# google drive shared link: https://drive.google.com/file/d/1z8QZ4YUGBYBMZH0L8OOhOtu7_zyn4CJN/view?usp=drive_link
-wget -c -O ucgMLST_database.tar.gz "https://drive.usercontent.google.com/download?id=1z8QZ4YUGBYBMZH0L8OOhOtu7_zyn4CJN&export=download&authuser=0&confirm=t"
+# google drive shared link: https://drive.google.com/file/d/108w1jI5JHxxmaNHmHPfC-UrRr65xX5d8//view?usp=drive_link
+
 DB_LOCATION=/path/to/database/location
 mkdir $DB_LOCATION && cd $DB_LOCATION
-tar zxf ucgMLST_database.tar.gz
+tar zxf ucgMLST_database.tar.gz  # Suppose you named the downloaded database file as ucgMLST_database.tar.gz 
 
 # step4 (optional): add ucgMLST to Environmental Variables 
 echo "export PATH=\$PATH:$INSTALL_PATH/module" >> ~/.bashrc
