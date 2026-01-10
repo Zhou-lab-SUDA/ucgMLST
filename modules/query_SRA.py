@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import os, click, numpy as np, pandas as pd
 import subprocess, re, gzip
 from multiprocessing import Pool
@@ -47,7 +46,7 @@ def map_to_uscgs(paf_files, uscgs, tmpdir, pool) :
                 pass
     if len(rmaps) :
         rmaps = np.vstack(rmaps)
-        
+
         read_rename, read_dist = {}, []
         for r in rmaps :
             if r[2] not in read_rename :
@@ -58,7 +57,7 @@ def map_to_uscgs(paf_files, uscgs, tmpdir, pool) :
                 r[2] = read_rename[r[2]]
                 if read_dist[r[2]] > r[5] :
                     read_dist[r[2]] = r[5]
-        
+
         read_dist = np.array(read_dist)
         rmaps.T[1] = rmaps.T[0]
         rmaps = np.hstack([rmaps, (rmaps.T[5] - read_dist[rmaps.T[2]]).reshape([-1, 1])]).astype(np.int32)
@@ -125,7 +124,7 @@ def map_reads(query, dbname, mode, tmpdir, max_dist, num_threads) :
                 '{minimap2} -t{3} -cx {5} -T20 --frag=yes -p{6} -N90000 -Y --end-bonus 12 -2 --secondary=yes {0} {1}|{EnFlt} {4}|{pigz} -c > {2}'.format(
                     uscg_db, qry_file, outfile, num_threads, max_dist, mode, p_dist, **executables,
                 ), cwd=tmpdir, shell=True).communicate()
-                
+
             outputs.append(outfile)
         os.unlink(qry_file)
 
@@ -141,8 +140,8 @@ def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max
     else :
         paf_files = [os.path.abspath(os.path.join(output, f'{id}.{jd}.paf.gz')) for id, _ in enumerate(query) for jd, _ in enumerate(dbname)]
         n_reads = int(np.load(os.path.join(output, 'uscg.npz'))['n_reads'])
- 
-    if not debug[1] : 
+
+    if not debug[1] :
         logging.info('Extracting USCG information...')
         read_maps, r_ids = map_to_uscgs(paf_files, uscg_info, output, pool)
         logging.info('Done')
@@ -154,7 +153,7 @@ def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max
         if not debug[2] :
             read_maps = data['reads']
         r_ids = data['r_ids']
-    
+
     if not debug[2] :
         logging.info('Extracting best aligned references...')
         matches, reads = get_matches(metadata, genome_info, uscg_info, read_maps, allowed_distance=allowed_distance)
@@ -198,7 +197,7 @@ def read_uscg(modules, metadata) :
         gene_sizes = dict(pd.read_csv(fai_file, header=None, sep='\t', usecols=[0,1]).values)
         n_uscgs = len(uscgs)
         uscgs.update({g:i+n_uscgs for i, g in enumerate([g for g in gene_sizes.keys() if g not in uscgs])})
-        
+
         cg_file = os.path.join(db, os.path.basename(db) + '.USCGs.profile.gz')
         cg = json.load(gzip.open(cg_file))
         g = { acc:[[uscgs[g], gene_sizes[g]] for g in cg[acc]] for acc in metadata.index if acc in cg if cg[acc][0] in uscgs }
@@ -208,7 +207,7 @@ def read_uscg(modules, metadata) :
 
 @click.command()
 @click.option('-q', '--query', help='fastq file(s), specify --query multiple times for additional reads', required=True, multiple=True)
-@click.option('-d', '--dbname', help='name of the databases [default: /titan/databases/ncbi_20240609z/]', default='/titan/databases/ncbi_20240609z/')
+@click.option('-d', '--dbname', help='name of the databases [default: /titan/databases/ncbi_20251109/]', default='/titan/databases/ncbi_20251109/')
 @click.option('-m', '--modules', help='name of the modules [default: bacteria,archaea,viral]', default='bacteria,archaea,viral')
 @click.option('-o', '--outdir', help='folder name storing the output', required=True)
 @click.option('-g', '--formal_genus', help='only accept formal genus designations [Default: False]', default=False, is_flag = True)
@@ -238,7 +237,7 @@ def main(query, dbname, modules, outdir, mode, formal_genus, formal_species, max
     query = [os.path.abspath(qry) for qry in query]
     dbname = os.path.abspath(dbname)
     modules = [ os.path.join(dbname, module) for module in modules.split(',') ]
-    
+
     if not os.path.isdir(outdir) :
         os.makedirs(outdir)
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import click, os, numpy as np, pandas as pd, tempfile, subprocess, json, _collections, re
 from configure import executables, logging
 from SRA_Funcs import get_taxonomy
@@ -17,7 +16,7 @@ def get_db(module, formal_genus, formal_species, num_threads) :
             subprocess.run(f"sed 's/_[0-9]\{{1,\}} \[/_/g; s/]//; s/ - /_/' {aa_tmp} |{executables['pigz']} > {aa_db}", shell=True)
         subprocess.run(f'{executables["diamond"]} makedb --threads {num_threads} --in {aa_db} --db {aa_db}'.split())
     na_sizes = pd.read_csv(os.path.join(module, f'{tag}.USCGs.alleles.fai'), sep='\t', header=None, usecols=[0, 1])
-    
+
     md_file = os.path.join(module, f'{tag}.db')
     metadata = pd.read_feather(md_file).set_index('accession')
     if formal_genus :
@@ -43,7 +42,7 @@ def prepare_query(query, outdir) :
 
 
 @click.command()
-@click.option('-q', '--query', help='assembly genomes', required=True)
+@click.option('-q', '--query', help='fastq file(s), specify --query multiple times for additional reads', required=True)
 @click.option('-d', '--dbname', help='name of the databases [default: /titan/databases/ncbi_20240609z/]', default='/titan/databases/ncbi_20240609z/')
 @click.option('-m', '--modules', help='name of the modules [default: bacteria,archaea,eukaryota]', default='bacteria,archaea,eukaryota')
 @click.option('-o', '--outdir', help='folder name storing the output', required=True)
@@ -82,8 +81,8 @@ def write_matches(matches, metadata, outdir) :
     res = {'OTU':[]}
     for genome, match in sorted(matches.items(), key=lambda m:m[1], reverse=True) :
         species, taxonomy = get_taxonomy(metadata, genome)
-        res['OTU'].append( [int(match[0]/match[1]*100000+0.5)/1000., int(match[2]), int(match[1]*1000+0.5)/1000., 
-                            species[0] + ('' if len(species) == 1 else ' ({0})'.format(','.join(species[1:]))), genome, 
+        res['OTU'].append( [int(match[0]/match[1]*100000+0.5)/1000., int(match[2]), int(match[1]*1000+0.5)/1000.,
+                            species[0] + ('' if len(species) == 1 else ' ({0})'.format(','.join(species[1:]))), genome,
                             {m[1]:[m[0], int(abs(m[6])), int(abs(m[7])), int(m[2]*100+0.5)/100., int(m[3]*100+0.5)/100.] for m in match[3]}, taxonomy] )
     json.dump(res, open(json_out, 'wt'))
     os.unlink(os.path.join(outdir, 'qry_aa'))
@@ -102,7 +101,7 @@ def mergeUSCGs(res) :
             oo = results[d[0]]
             ovl = False
             for o in oo :
-                
+
                 s, e = max(d[6], o[0][6]), min(d[7], o[0][7])
                 if ((e - s + 1) >= 0.5 * (d[7] - d[6] + 1)) or ((e - s + 1) >= 0.5 * (o[0][7] - o[0][6] + 1)) :
                     o.append(d)
@@ -122,10 +121,10 @@ def mapToGenomes(uscgs, profile, min_genes) :
                 uscg_map[gene[1]] = [[gene[3], gene[2], ui, gi]]
             else :
                 uscg_map[gene[1]].append([gene[3], gene[2], ui, gi])
-    
+
     for gene, info in uscg_map.items() :
         uscg_map[gene] = sorted(info, reverse=True)
-    
+
     gene_counts = {}
     genomes = _collections.defaultdict(dict)
     for genome, genes in profile.items() :
@@ -222,7 +221,7 @@ def retrieve_uscg(qry_aa, aa_db, na_sizes, min_iden, num_threads) :
     bsp.loc[~pos, 6], bsp.loc[~pos, 7] = bsp.loc[~pos, 6]*3 - 3 - q.loc[~pos, 1], bsp.loc[~pos, 7]*3 - 1 - q.loc[~pos, 1]
     bsp[0], bsp[1] = q[0], r[0]
     bsp[10] = np.vectorize(na_sizes.get)(r[0])
-    
+
     bsp = bsp.sort_values(by=[1, 0, 6])
     for d in np.arange(1,10) :
         for _ in np.arange(100) :
@@ -261,7 +260,7 @@ def retrieve_uscg(qry_aa, aa_db, na_sizes, min_iden, num_threads) :
     res[3] = res[2]*(res[9]-res[8]+1)/res[10]
     logging.info(f'Identified {len(res)} potential matches.')
     return res
-            
+
 
 
 if __name__ == '__main__' :

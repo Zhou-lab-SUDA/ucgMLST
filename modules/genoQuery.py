@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import os, click, numpy as np, pandas as pd
 import subprocess, re, gzip
 from multiprocessing import Pool
@@ -10,7 +9,7 @@ from SRA_Funcs import generate_outputs, write_seq
 
 def uscg2frag(read_maps, uscgs, block_size) :
     sites = np.array([(read_maps.T[3] // block_size), ((read_maps.T[4]-1) // block_size)], dtype=int).T
-    
+
     new = []
     while sites.shape[0] > 0 :
         read_maps.T[0] = sites.T[0]
@@ -21,7 +20,7 @@ def uscg2frag(read_maps, uscgs, block_size) :
 
         new[-1].T[4] = np.min([(new[-1].T[0]+1) * block_size, new[-1].T[4]], 0) - np.max([new[-1].T[0] * block_size, new[-1].T[3]], 0)
         new[-1] = new[-1][new[-1].T[4] >= 10]
-        
+
     read_maps = np.vstack(new)
     tmp = np.zeros(max(uscgs.keys())+1, dtype=np.uint32)
     for k, (s,e) in uscgs.items() :
@@ -31,27 +30,27 @@ def uscg2frag(read_maps, uscgs, block_size) :
     return read_maps
 
 
-def find_cov_outlier(covs, block_size) :
+def find_cov_outlier(covs, block_size, delta_fold=3) :
     q1, q3 = np.quantile(covs.T[0], 0.25), np.quantile(covs.T[0], 0.75)
     delta_q = max(q3 - q1, 1.5/block_size)
-    idx = (covs.T[1]/covs.T[2] <= q3 + 3*delta_q)
+    idx = (covs.T[1]/covs.T[2] <= q3 + delta_fold*delta_q)
     return idx
 
 
 
-def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min_gene_match=3, block_size=500) :
+def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min_gene_match=3, block_size=500, delta_fold=3) :
     '''frag_id, gene_id, read_id, start/cur_diff, end/size, mutation, diff
         0          1       2       3                4       5        6   '''
     allowed_distance *= 10000.
     pos_genes = set(read_maps[read_maps.T[6] <= allowed_distance, 0])
     genomes = {genome:len([g for g, s in genes if g in pos_genes]) for genome, genes in genome_info.items()}
     genomes = {genome:genes for genome, genes in genome_info.items() if genomes[genome] >= min_gene_match or genomes[genome]*3 >= len(genes)}
-    
+
     uscgs = {g:s for gg in genomes.values() for g, s in gg}
     read_maps = read_maps[pd.Series(read_maps.T[0]).isin(uscgs)]
     if read_maps.shape[0] <= 0 :
         return [], []
-    
+
     d = np.array(sorted(uscgs.items()))
     fragments = []
     while d.shape[0] > 0 :
@@ -62,11 +61,11 @@ def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min
     fragments = np.vstack(fragments)
     fragments = fragments[np.argsort(fragments.T[0], kind='mergesort')]
     fragments.T[1] += int(0.1 * block_size)
-    
+
     change_indices = np.concatenate([[0], np.where(np.diff(fragments.T[0]) > 0)[0]+1, [len(fragments)]])
     uscg_frag = {fragments[start, 0]: [start, end] for start, end in zip(change_indices[:-1], change_indices[1:])}
     fragments = fragments.T[1]
-    
+
     genome2 = {genome:np.array([[i, fragments[i], g] for g, s in genes for i in range(*uscg_frag[g])], dtype=int) for genome, genes in genomes.items()}
     max_frag = np.max([np.max(gn.T[0]) for gn in genome2.values()])+1
     read_maps = uscg2frag(read_maps, uscg_frag, block_size)
@@ -76,23 +75,26 @@ def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min
     summed_reads[:, 1:].fill(9999999)
     summed_reads[:, 0].fill(-1)
     coverages = [ [-1, -1, -1, genome, []] for genome in genome2.keys() ]
-    
+
     while len(coverages) > 0 :
-        frag_cov = np.bincount(read_maps.T[0], weights=np.power(0.398107171, read_maps.T[6].astype(np.float64) / 100.), minlength=max_frag)
-        
+        # frag_cov = np.bincount(read_maps.T[0], weights=np.power(0.398107171, read_maps.T[6].astype(np.float64) / 100.), minlength=max_frag)
+        frag_cov = np.bincount(read_maps.T[0], weights=np.power(0.33333333, read_maps.T[6].astype(np.float64) / 100.), minlength=max_frag)
+
         max_i = -1
         for i, (depth, n_gene, n_frag, genome, g_cov) in enumerate(coverages) :
             if depth == -1 or max_i < 0 or depth >= coverages[max_i][0] :
                 genes = genome2[genome]
             else :
                 break
-            
+
             covs = np.array([ [((frag_cov[f]+.5)/(s+.5)), frag_cov[f], s, g] \
                                   if f < frag_cov.size else [0., 0, s, g] for f, s, g in genes ])
-            idx = find_cov_outlier(covs, block_size)
+            idx = find_cov_outlier(covs, block_size, delta_fold)
             if len(g_cov) > 0 :
-                if np.sum((covs[idx, 1] < 0.02 * g_cov[idx]) | ((covs[idx, 1] < 0.2 * g_cov[idx]) & (covs[idx, 1] < 0.5))) >= 0.8 * np.sum(g_cov[idx] > 0) :
+                if np.sum((covs[idx, 1] < 0.05 * g_cov[idx]) | ((covs[idx, 1] < 0.2 * g_cov[idx]) & (covs[idx, 1] < 0.5))) >= 0.75 * np.sum(g_cov[idx] > 0) :
                     coverages[i] = [0, 0, 0, genome, g_cov]
+                # if np.sum((covs[idx, 1] < 0.02 * g_cov[idx]) | ((covs[idx, 1] < 0.2 * g_cov[idx]) & (covs[idx, 1] < 0.5))) >= 0.8 * np.sum(g_cov[idx] > 0) :
+                #     coverages[i] = [0, 0, 0, genome, g_cov]
                     continue
             cov = np.sum(covs[idx, 1]) / np.sum(covs[idx, 2])
             n_frag = covs[(covs[:, 1] >= 1.) & idx, 3].shape[0]
@@ -107,23 +109,23 @@ def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min
         (depth, n_gene, n_frag, match, g_cov) = coverages[max_i]
         logging.info(f'    Ref: {match} with {n_gene} USCGs. ')
         coverages = [c for c in sorted(coverages, reverse=True) if c[0] > 0]
-        
+
         match_genes = [g for g, s in genomes[match]]
         matches = read_maps[pd.Series(read_maps.T[1]).isin(match_genes)]
         match_covs = dict(zip(*np.unique(matches[matches.T[6] <= allowed_distance, 0], return_counts=True)))
-        
+
         covs = np.array([[(match_covs.get(g, 0) + 0.5)/(s + 0.5), match_covs.get(g, 0), s, og] for g, s, og in genome2[match]])
-        idx = find_cov_outlier(covs, block_size)
+        idx = find_cov_outlier(covs, block_size, delta_fold)
 
         # report hits
         match_results.append([match, np.sum(covs[idx].T[1])/np.sum(covs[idx].T[2])])
 
         frag1, frag2 = set(genome2[match][idx, 0]), set(genome2[match][~idx, 0])
         reads_ignored = set(matches[pd.Series(matches.T[0]).isin(frag2), 2]) - set(matches[pd.Series(matches.T[0]).isin(frag1), 2])
-        
+
         matched_reads = np.zeros([summed_reads.shape[0], 3], dtype=np.int32)
         matched_reads[:] = 9999999
-        
+
         _, ridx = np.unique(matches.T[2], return_index=True)
         matched_reads[matches[ridx, 2], :] = matches[ridx, :][:, (0,1,5)]
         matched_reads[list(reads_ignored)] = 9999999
@@ -131,11 +133,11 @@ def get_matches(metadata, genome_info, uscgs, read_maps, allowed_distance=2, min
         idx = (matched_reads.T[2] < summed_reads.T[3])
         summed_reads[idx, 0] = len(match_results) - 1
         summed_reads[idx, 1:] = matched_reads[idx]
-        
+
         reads_todrop = set(matches[matches.T[6] <= allowed_distance, 2]) - reads_ignored
         frag_todrop = set(matches.T[0])
         read_maps = read_maps[~pd.Series(read_maps.T[0]).isin(frag_todrop) & ~pd.Series(read_maps.T[2]).isin(reads_todrop)]
-        
+
         coverages = [ c for c in coverages if c[3] != match ]
 
     for m in np.unique(summed_reads[summed_reads.T[0] >= 0, 0]):
@@ -205,7 +207,7 @@ def map_to_uscgs(paf_files, uscgs, tmpdir, pool) :
                 pass
     if len(rmaps) :
         rmaps = np.vstack(rmaps)
-        
+
         read_rename, read_dist = {}, []
         for r in rmaps :
             if r[2] not in read_rename :
@@ -216,7 +218,7 @@ def map_to_uscgs(paf_files, uscgs, tmpdir, pool) :
                 r[2] = read_rename[r[2]]
                 if read_dist[r[2]] > r[5] :
                     read_dist[r[2]] = r[5]
-        
+
         read_dist = np.array(read_dist)
         rmaps.T[1] = rmaps.T[0]
         rmaps = np.hstack([rmaps, (rmaps.T[5] - read_dist[rmaps.T[2]]).reshape([-1, 1])]).astype(np.int32)
@@ -227,52 +229,99 @@ def map_to_uscgs(paf_files, uscgs, tmpdir, pool) :
 def map_reads(query, dbname, mode, tmpdir, max_dist, num_threads) :
     outputs = []
     total_reads = 0
-
+    left_cuts = [0 for qry in query]
     for qid, qry in enumerate(query):
-        if qry.lower().endswith('q.gz') :
+        # init_site = 0
+        if qry.lower().endswith('q') or qry.lower().endswith('q.gz') :
+            if qry.lower().endswith('q.gz') :
+                fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True).stdout
+            elif qry.lower().endswith('q') :
+                fin = open(qry, 'rt')
+            reads = []
+            for id, line in enumerate(fin) :
+                if id > 2000000 :
+                    break
+                if id % 40 == 1 :
+                    reads.append(list(line.strip())[:12])
+            fin.close()
+            reads = np.array(reads).T
+            for ix in range(max(reads.shape[0], 12)) :
+                site = reads[ix]
+                _, cnt = np.unique(site, return_counts=True)
+                max_cnt = np.max(cnt)/site.size
+                if max_cnt >= 0.8 :
+                    left_cuts[qid] = ix + 1
+
+            if left_cuts[qid] > 0 :
+                logging.info(f'Trimmed {left_cuts[qid]} bases from the beginning of reads in {os.path.basename(qry)} based on base composition bias.')
+
+            if qry.lower().endswith('q.gz') :
+                fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True).stdout
+            elif qry.lower().endswith('q') :
+                fin = open(qry, 'rt')
             qry_file = os.path.abspath(os.path.join(tmpdir, 'r.fastq.gz'))
-            fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
             with open(qry_file, 'wb') as fout2 :
                 fout = subprocess.Popen('{pigz} -c'.format(**executables).split(), stdin=subprocess.PIPE, stdout=fout2, universal_newlines=True)
-                for id, line in enumerate(fin.stdout) :
+                for id, line in enumerate(fin) :
                     if id%4 == 0 :
                         fout.stdin.write(f'@{total_reads:X}\n')
                         total_reads += 1
-                    else :
+                    elif id%4 == 2 :
                         fout.stdin.write(line)
-                fout.communicate()
-            fin.communicate()
-        elif qry.lower().endswith('q') :
-            qry_file = os.path.abspath(os.path.join(tmpdir, 'r.fastq'))
-            with open(qry, 'rt') as fin, open(qry_file, 'wt') as fout:
-                for id, line in enumerate(fin) :
-                    if id%4 == 0 :
-                        fout.write(f'@{total_reads:X}\n')
-                        total_reads += 1
                     else :
-                        fout.write(line)
-        elif qry.lower().endswith('.gz') :
+                        fout.stdin.write(line[left_cuts[qid]:])
+                fout.communicate()
+            fin.close()
+        else :
+            if qry.lower().endswith('.gz') :
+                fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True).stdout
+            else :
+                fin = open(qry, 'rt')
+            reads = []
+            total_reads = 0
+            for line in fin :
+                if line.startswith('>') :
+                    total_reads += 1
+                    if total_reads > 500000 :
+                        break
+                    elif total_reads % 10 == 1 :
+                        reads.append([])
+                elif total_reads % 10 == 1 :
+                    if len(reads[-1]) < 12 :
+                        reads[-1].extend(list(line.strip()))
+                        reads[-1] = reads[-1][:12]
+            fin.close()
+            reads = np.array(reads).T
+            for ix in range(max(reads.shape[0], 12)) :
+                site = reads[ix]
+                _, cnt = np.unique(site, return_counts=True)
+                max_cnt = np.max(cnt)/site.size
+                if max_cnt >= 0.8 :
+                    left_cuts[qid] = ix + 1
+
+            if left_cuts[qid] > 0 :
+                logging.info(f'Trimmed {left_cuts[qid]} bases from the beginning of reads in {os.path.basename(qry)} based on base composition bias.')
+
+            if qry.lower().endswith('.gz') :
+                fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True).stdout
+            else :
+                fin = open(qry, 'rt')
             qry_file = os.path.abspath(os.path.join(tmpdir, 'r.fasta.gz'))
-            fin = subprocess.Popen('{pigz} -cd {0}'.format(qry, **executables).split(), stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
             with open(qry_file, 'wb') as fout2 :
+                x = 0
                 fout = subprocess.Popen('{pigz} -c'.format(**executables).split(), stdin=subprocess.PIPE, stdout=fout2, universal_newlines=True)
-                for line in fin.stdout :
+                for line in fin :
                     if line.startswith('>') :
                         fout.stdin.write(f'>{total_reads:X}\n')
                         total_reads += 1
+                        x = 0
+                    elif x == 0 :
+                        fout.stdin.write(line[left_cuts[qid]:])
+                        x = 1
                     else :
                         fout.stdin.write(line)
                 fout.communicate()
-            fin.communicate()
-        else :
-            qry_file = os.path.abspath(os.path.join(tmpdir, 'r.fasta'))
-            with open(qry, 'rt') as fin, open(qry_file, 'wt') as fout:
-                for line in fin :
-                    if line.startswith('>') :
-                        fout.write(f'>{total_reads:X}\n')
-                        total_reads += 1
-                    else :
-                        fout.write(line)
+            fin.close()
 
         for rid, db in enumerate(dbname) :
             outfile = f'{qid}.{rid}.paf.gz'
@@ -283,24 +332,25 @@ def map_reads(query, dbname, mode, tmpdir, max_dist, num_threads) :
                 '{minimap2} -t{3} -cx {5} -T20 --frag=yes -p{6} -N90000 -Y --end-bonus 12 -2 --secondary=yes {0} {1}|{EnFlt} {4}|{pigz} -c > {2}'.format(
                     uscg_db, qry_file, outfile, num_threads, max_dist, mode, p_dist, **executables,
                 ), cwd=tmpdir, shell=True).communicate()
-                
+
             outputs.append(outfile)
         os.unlink(qry_file)
 
-    return outputs, total_reads
+    return outputs, total_reads, np.array(left_cuts, dtype=np.int32)
 
 
-def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max_dist, allowed_distance, min_depth, min_consensus, pool, debug=[False, False, False, False]) :
+def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max_dist, allowed_distance, min_depth, min_consensus, cover_fold, pool, debug=[False, False, False, False]) :
     if not debug[0] :
         logging.info('Running read mapping...')
-        paf_files, n_reads = map_reads(query, dbname, mode, output, max_dist, len(pool._pool))
-        # np.savez_compressed(os.path.join(output, 'uscg.npz'), n_reads=np.array(n_reads))
+        paf_files, n_reads, left_cuts = map_reads(query, dbname, mode, output, max_dist, len(pool._pool))
+        # np.savez_compressed(os.path.join(output, 'uscg.npz'), n_reads=np.array(n_reads), left_cuts=left_cuts)
         logging.info('Done')
     else :
         paf_files = [os.path.abspath(os.path.join(output, f'{id}.{jd}.paf.gz')) for id, _ in enumerate(query) for jd, _ in enumerate(dbname)]
-        n_reads = int(np.load(os.path.join(output, 'uscg.npz'))['n_reads'])
- 
-    if not debug[1] : 
+        # n_reads = int(np.load(os.path.join(output, 'uscg.npz'))['n_reads'])
+        # left_cuts = np.load(os.path.join(output, 'uscg.npz'))['left_cuts']
+
+    if not debug[1] :
         logging.info('Extracting USCG information...')
         read_maps, r_ids = map_to_uscgs(paf_files, uscg_info, output, pool)
         logging.info('Done')
@@ -312,10 +362,10 @@ def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max
         if not debug[2] :
             read_maps = data['reads']
         r_ids = data['r_ids']
-    
+
     if not debug[2] :
         logging.info('Extracting best aligned references...')
-        matches, reads = get_matches(metadata, genome_info, uscg_info, read_maps, allowed_distance=allowed_distance)
+        matches, reads = get_matches(metadata, genome_info, uscg_info, read_maps, allowed_distance=allowed_distance, delta_fold=cover_fold)
         logging.info('Done')
         if len(matches) == 0 :
             return {'profile':[], 'OTU':[]}
@@ -325,7 +375,7 @@ def query_sra(query, dbname, metadata, genome_info, uscg_info, output, mode, max
         matches, reads = data['matches'], data['reads']
     if not debug[3] :
         logging.info('Preparing outputs...')
-        outputs, bam = generate_outputs(paf_files, query, metadata, matches, reads, r_ids, output, genome_info, uscg_info, n_reads)
+        outputs, bam = generate_outputs(paf_files, query, metadata, matches, reads, r_ids, output, genome_info, uscg_info, n_reads, left_cuts)
         # json.dump(dict(outputs=outputs, bam=bam), open(os.path.join(output, 'out2.json'), 'wt'))
         logging.info('Done')
     else :
@@ -356,7 +406,7 @@ def read_uscg(modules, metadata) :
         gene_sizes = dict(pd.read_csv(fai_file, header=None, sep='\t', usecols=[0,1]).values)
         n_uscgs = len(uscgs)
         uscgs.update({g:i+n_uscgs for i, g in enumerate([g for g in gene_sizes.keys() if g not in uscgs])})
-        
+
         cg_file = os.path.join(db, os.path.basename(db) + '.USCGs.profile.gz')
         cg = json.load(gzip.open(cg_file))
         g = { acc:[[uscgs[g], gene_sizes[g]] for g in cg[acc]] for acc in metadata.index if acc in cg if cg[acc][0] in uscgs }
@@ -366,8 +416,8 @@ def read_uscg(modules, metadata) :
 
 @click.command()
 @click.option('-q', '--query', help='fastq file(s), specify --query multiple times for additional reads', required=True, multiple=True)
-@click.option('-d', '--dbname', help='path of the databasesc', required=True)
-@click.option('-m', '--modules', help='name of the modules [default: bacteria,archaea,viral]', default='bacteria,archaea,viral')
+@click.option('-d', '--dbname', help='name of the databases [default: /titan/databases/ncbi_20251109/]', default='/titan/databases/ncbi_20251109/')
+@click.option('-m', '--modules', help='name of the modules [default: bacteria,archaea,viral,eukaryota]', default='bacteria,archaea,viral,eukaryota')
 @click.option('-o', '--outdir', help='folder name storing the output', required=True)
 @click.option('-g', '--formal_genus', help='only accept formal genus designations [Default: False]', default=False, is_flag = True)
 @click.option('-s', '--formal_species', help='only accept formal species designations [Default: False]', default=False, is_flag = True)
@@ -375,9 +425,10 @@ def read_uscg(modules, metadata) :
 @click.option('-M', '--mode', help='One of sr [default], map-ont, map-hifi, map-pb, asm20', default='sr')
 @click.option('-D', '--max_dist', help='maximum distance of alignment [Default: 0.05 or 0.20 for asm20]', default=None, type=float)
 @click.option('-x', '--allowed_difference', help='allowed SNP difference for top hits [Default: 0.02 for sr and map-hifi or 0.04 for others]', default=None, type=float)
+@click.option('-f', '--coverage_fold_diff', help='allowed coverage fold differene (relative to std) for identifying nonspecific matches. [default: 3]', default=3, type=float)
 @click.option('--min_depth', help='minimum read depth to call a base reliably. [Default: 3]', default=3, type=int)
 @click.option('--min_consensus', help='minimum proportion of consensus to call a base reliably [Default: 0.8]', default=0.8, type=float)
-def main(query, dbname, modules, outdir, mode, formal_genus, formal_species, max_dist, allowed_difference, num_threads, min_depth, min_consensus) :
+def main(query, dbname, modules, outdir, mode, formal_genus, formal_species, max_dist, allowed_difference, num_threads, min_depth, min_consensus, coverage_fold_diff) :
     if allowed_difference == None :
         if mode in ('sr', 'map-hifi') :
             allowed_difference = 0.02
@@ -396,14 +447,14 @@ def main(query, dbname, modules, outdir, mode, formal_genus, formal_species, max
     query = [os.path.abspath(qry) for qry in query]
     dbname = os.path.abspath(dbname)
     modules = [ os.path.join(dbname, module) for module in modules.split(',') ]
-    
+
     if not os.path.isdir(outdir) :
         os.makedirs(outdir)
 
     metadata = read_metadata(modules, formal_genus, formal_species)
     genomes, uscgs = read_uscg(modules, metadata)
     logging.info('Done')
-    query_sra(query, modules, metadata, genomes, uscgs, outdir, mode, max_dist, allowed_difference, min_depth, min_consensus, pool)
+    query_sra(query, modules, metadata, genomes, uscgs, outdir, mode, max_dist, allowed_difference, min_depth, min_consensus, coverage_fold_diff, pool)
 
 
 

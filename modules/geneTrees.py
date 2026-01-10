@@ -60,7 +60,7 @@ def each_minimap(data) :
             s = np.array(['-'] * p[6])
         i0, i1, d = (p[2], p[7], 1) if p[4] == '+' else (p[3], p[7], -1)
 
-        for n, t in re.findall(r'(\d+)([MDI])', p[11]) :
+        for n, t in re.findall('(\d+)([MDI])', p[11]) :
             n = int(n)
             if t == 'M' :
                 ss = np.array(list(t_seq[p[0]][i0:(i0+n)] if p[4] == '+' else rc(t_seq[p[0]][(i0-n):i0])))
@@ -74,7 +74,7 @@ def each_minimap(data) :
         res_seqs[p[5]] = s
     res = {}
     for g, s in res_seqs.items() :
-        s = re.sub(r'[nN\.]', '-', ''.join(s))
+        s = re.sub('[nN\.]', '-', ''.join(s))
         if len(s.replace('-', '')) >= min_presence * len(s) :
             gene = g.rsplit('_', 1)[0]
             res[gene] = s
@@ -108,49 +108,57 @@ def minimap_align(tmpdir, metadata, profiles, uscgs, genomes, min_identity, min_
 
 
     qryseqs = _collections.OrderedDict([[metadata.index[0], {}]])
-    concatenated_seqs = _collections.OrderedDict([[metadata.index[0], '']])
+    # concatenated_seqs = _collections.OrderedDict([[metadata.index[0], '']])
+    gene_seqs = { gene: _collections.OrderedDict([[metadata.index[0], '']]) for gene in genes }
+
     for qry, seqs, qry_stats, ftag in pool.imap_unordered(each_minimap, [ [tmpdir, fn, min_identity, {'ref':min_presence_ref, 'qry':min_presence}[ftag], ftag] \
                                                                         for fn, ftag in queries.items() ]) :
         min_p = {'ref':min_presence_ref, 'qry':min_presence}[ftag]
-        if len(seqs) >= min_p * len(genes) and len(seqs) >= min_p * qry_stats[0] :
+        if len(seqs) >= min_p * len(genes) and len(seqs) >= min_presence_ref * qry_stats[0] :
             lq_geneNum = np.sum([len(seqs.get(g, '').replace('-', ''))/len(ref_seqs[g]) > min_p for g in genes])
             hq_geneNum = np.sum([len(re.sub('[^ACGT]', '', seqs.get(g, '')))/len(ref_seqs[g]) > min_p for g in genes])
 
             qryseqs[qry] = seqs
-            if hq_geneNum >= min_p * len(genes) and hq_geneNum >= min_p * qry_stats[0] :
-                s = ''.join([ seqs.get(g, '-' * len(ref_seqs[g])) for g in genes ])
-                s2 = re.sub('[^ACGT]', '-', s)
-                concatenated_seqs[qry] = s2
-            elif (not no_risky) and ftag == 'qry' and lq_geneNum >= min_p * len(genes) and lq_geneNum >= min_p * qry_stats[0] :
-                s = ''.join([ seqs.get(g, '-' * len(ref_seqs[g])) for g in genes ])
-                concatenated_seqs[f'{qry}|low_qual'] = s
-
+            if hq_geneNum >= min_p * len(genes) and hq_geneNum >= min_presence_ref * qry_stats[0] :
+                for g in genes :
+                    s = seqs.get(g, '')
+                    s = re.sub('[^ACGT]', '-', s)
+                    if len(s) and len(s.replace('-', '')) >= min_p * len(s) :
+                        gene_seqs[g][qry] = s
+            elif ftag == 'qry' and lq_geneNum >= min_p * len(genes) and lq_geneNum >= min_presence_ref * qry_stats[0] :
+                for g in genes :
+                    s = seqs.get(g, '')
+                    if len(s) and len(s.replace('-', '')) >= min_p * len(s):
+                        gene_seqs[g][f'{qry}|low_qual'] = s
             if len(qryseqs) % 100 == 0 :
                 logging.info(f'Extracted {len(qryseqs)} USCGs from both the db and the samples.')
 
-    logging.info(f'Identified {len(concatenated_seqs)} samples with good sequences.')
-    aln_file = os.path.join(tmpdir, 'USCG_align.fas')
-    with open(aln_file, 'w') as fout :
-        for n, s in concatenated_seqs.items() :
-            if len(s) :
-                fout.write('>{0}\n{1}\n'.format(n, s))
+    logging.info(f'Identified {len(gene_seqs)} genes with good sequences.')
+    results = []
+    for gene, seqs in gene_seqs.items() :
+        if len(seqs) >= 4 :
+            aln_file = os.path.join(tmpdir, f'{gene}.fas')
+            with open(aln_file, 'w') as fout :
+                for n, s in seqs.items() :
+                    if len(s) :
+                        fout.write('>{0}\n{1}\n'.format(n, s))
 
-    subprocess.Popen('{iqtree} -nt {0} -fast -redo -s USCG_align.fas -m GTR -pre USCG_align --runs 6 --polytomy'.format(
-        len(pool._pool), **executables).split(), stdout=subprocess.PIPE, cwd=tmpdir).communicate()
-    tre = ete3.Tree(os.path.join(tmpdir, 'USCG_align.treefile'), format=0)
-    tre.set_outgroup(tre.get_midpoint_outgroup())
-    for i, n in enumerate(tre.traverse('postorder')) :
-        if n.name == '' :
-            n.name = f'Node{i}'
-
-    return aln_file, tre
+            subprocess.Popen('{iqtree} -nt {0} -fast -redo -s {1}.fas -m GTR -pre {1} --runs 5 --polytomy'.format(
+                len(pool._pool), gene, **executables).split(), cwd=tmpdir).communicate()
+            tre = ete3.Tree(os.path.join(tmpdir, f'{gene}.treefile'), format=0)
+            tre.set_outgroup(tre.get_midpoint_outgroup())
+            for i, n in enumerate(tre.traverse('postorder')) :
+                if n.name == '' :
+                    n.name = f'Node{i}'
+            results.append([f'{gene}.fas', tre])
+    return results
 
 
 def readJson(dat) :
     uscgs, ref = dat
     items = _collections.defaultdict(dict)
     for uscg in uscgs :
-        if os.path.basename(uscg) == 'profile.json' or os.path.basename(uscg).startswith('resolved') :
+        if os.path.basename(uscg) == 'profile.json' :
             tag = os.path.basename(os.path.dirname(uscg))
         else :
             tag = os.path.basename(uscg).rsplit('.', 1)[0]
@@ -297,11 +305,12 @@ def genoPhylo(uscg_files, dbname, module, reference, min_identity, min_presence,
         os.unlink(os.path.join(outdir, 'tree_info.dump'))
 
     with tempfile.TemporaryDirectory(prefix='qry_', dir='.') as tmpdir :
-        aln_file, tre = minimap_align(tmpdir, metadata, profiles, uscgs, sorted(genomes.keys()), min_identity, min_presence, min_presence_ref, no_risky, no_db, pool)
-        with open(os.path.join(outdir, 'uscg.concat.fas'), 'wt') as aln_out, open(aln_file, 'rt') as fin :
-            aln_out.write(fin.read())
-    with open(os.path.join(outdir, 'uscg.nwk'), 'wt') as nwk_out :
-        nwk_out.write(tre.write(format=1)+'\n')
+        results = minimap_align(tmpdir, metadata, profiles, uscgs, sorted(genomes.keys()), min_identity, min_presence, min_presence_ref, no_risky, no_db, pool)
+        for aln_file, tre in results :
+            with open(os.path.join(outdir, os.path.basename(aln_file)), 'wt') as aln_out, open(os.path.join(tmpdir, aln_file), 'rt') as fin :
+                aln_out.write(fin.read())
+            with open(os.path.join(outdir, f'{os.path.basename(aln_file)}.nwk'), 'wt') as nwk_out :
+                nwk_out.write(tre.write(format=1)+'\n')
     if len(genomes) :
         with open(os.path.join(outdir, 'genome.list'), 'wt') as fout :
             for genome in sorted(genomes.keys()) :

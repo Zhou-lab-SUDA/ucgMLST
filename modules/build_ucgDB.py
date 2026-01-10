@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import os, gzip, click, re, json
 import subprocess, tempfile
 import numpy as np, pandas as pd
@@ -23,7 +22,7 @@ def rc(seq) :
 def detranseq(d, orf_coords) :
     s, e = orf_coords[d[0]]
     d[0] = d[0].rsplit('_', 1)[0]
-    
+
     if s < e :
         d[3], d[4] = s + (d[3]-1)*3, s + (d[4]*3 - 1)
         d[7] = 1
@@ -87,7 +86,7 @@ def check_uscgs(fname, dbname, domain,  all_hits=False) :
             if domain in p1 :
                 fn = os.path.join(dbname, 'hmms', f'{p0}.hmm')
                 hmms[p0] = [fn, 1] if domain == p1 else [fn, 0]
-    
+
     genome_profile = {}
     with gzip.open(fname, 'rt') as fin :
         for line in fin :
@@ -97,7 +96,7 @@ def check_uscgs(fname, dbname, domain,  all_hits=False) :
                 g1 = toMerge.get(g1, g1)
                 if g1 not in hmms :
                     continue
-                
+
                 genome_profile[g1] = genome_profile.get(g1, []) + [[line]]
             elif g1 in hmms :
                 genome_profile[g1][-1].append(line)
@@ -112,7 +111,7 @@ def check_uscgs(fname, dbname, domain,  all_hits=False) :
 
 def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False) :
     outfile = '{0}.USCGs.ffn'.format(acc)
-    
+
     subprocess.Popen('{getorf} -table 4 -minsize 100 -sequence {0} -nomethionine -outseq {1}'.format(
         query, os.path.join(dirname,'{0}.aa'.format(acc)), **executables).split(), stderr=subprocess.PIPE).communicate()
 
@@ -120,7 +119,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False) :
     with open(os.path.join(dirname,'{0}.aa'.format(acc)), 'rt') as fin :
         for line in fin :
             if line.startswith('>') :
-                n, s, e = re.findall('>(\S+) \[(\d+) - (\d+)\]', line)[0]
+                n, s, e = re.findall(r'>(\S+) \[(\d+) - (\d+)\]', line)[0]
                 orf_coords[n] = [int(s), int(e)]
 
     dataset = []
@@ -197,7 +196,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False) :
 
     sequences = readFasta(query)
     ids = {}
-    
+
     with open(os.path.join(dirname, outfile), 'wt') as ffn_out :
         for data in dataset :
             s = sequences[data[0][0]][data[0][3]-1:data[-1][4]]
@@ -212,7 +211,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False) :
     return os.path.abspath(os.path.join(dirname, outfile)), \
             np.sum([hmms[hmm][1] != 1 for hmm, cnt in ids.items() if cnt == 1 or all_hits], dtype=int), \
             np.sum([hmms[hmm][1] for hmm, cnt in ids.items() if cnt == 1 or all_hits], dtype=int)
-    
+
 
 def prepare_uscg(in_fna, db, acc, tmpdir, domain, all_hits=False) :
     if in_fna.lower().endswith('.gz') :
@@ -222,7 +221,7 @@ def prepare_uscg(in_fna, db, acc, tmpdir, domain, all_hits=False) :
             **executables), shell=True).communicate()
         in_fna = os.path.join(tmpdir, f'{acc}.fna')
 
-    if os.stat(in_fna).st_size >= 3.5*1000000000 :
+    if os.stat(in_fna).st_size >= .6*1000000000 :
         return '', -1, -1
 
     uscg_ffn, n_shared, n_specific = get_uscgs(in_fna, db, acc, tmpdir, domain, all_hits)
@@ -235,7 +234,7 @@ def process_query(data) :
     if os.path.isfile(output) and domain.lower() not in ('virus', 'viral') :
         n_uscg, n_specific = check_uscgs(output, db, domain)
     else :
-        with tempfile.TemporaryDirectory(dir='.') as tmpdir :        
+        with tempfile.TemporaryDirectory(dir='.') as tmpdir :
             if domain.lower() in ('bacteria', 'archaea', 'eukaryota') :
                 fas, n_uscg, n_specific = prepare_uscg(fna, db, acc, tmpdir, domain)
             else :
@@ -253,9 +252,7 @@ def process_query(data) :
                             fout.write(line)
                 fin.close()
                 fas = f2
-            subprocess.Popen('{gzip} -c {0} > {1}'.format(
-                fas, output, 
-                **executables), shell=True).communicate()
+            subprocess.Popen('{gzip} -c {0} > {1}'.format(fas, output, **executables), shell=True).communicate()
     return acc, output, n_uscg, n_specific
 
 
@@ -263,46 +260,82 @@ def process_query(data) :
 @click.command()
 @click.option('-d', '--db', help='folder for the database')
 @click.option('-D', '--domain', help='one of bacteria [default], archaea, eukaryota, or virus. Use virus to skip USCG step (only do low complex filtering)', default='bacteria')
-@click.option('-p', '--representative', help='ANI99, ANI98 [default], ANI95, or ANI90', default='ANI98')
+@click.option('-p', '--representative', help='ANI99 [default], ANI98, ANI95, or ANI90', default='ANI99')
 @click.option('-r', '--reference', help='uscg references. default ucgMLST/db/uscgs', default='/titan/softwares/ucgMLST/db/uscgs/')
-@click.option('-m', '--min_shared', help='minimum number of unique, corss-domain uscg genes for quality control. default: 45', default=45, type=int)
-@click.option('-M', '--min_specific', help='minimum number of unique, domain specific uscg genes for quality control. default: 5', default=5, type=int)
-def main(db, reference, domain, representative, min_shared, min_specific) :
+@click.option('-m', '--min_uscg', help='minimum number of unique, corss-domain uscg genes for quality control. default: 60', default=60, type=int)
+# @click.option('-M', '--min_specific', help='minimum number of unique, domain specific uscg genes for quality control. default: 5', default=5, type=int)
+def main(db, reference, domain, representative, min_uscg) :
     assert db, 'db needs to be specified.'
-    pool = Pool(4)
-    
+    pool = Pool(20)
+
     if not db.endswith('.db') :
-        db = os.path.join(db, os.path.basename(db)+'.db')
-    metadata = pd.read_feather(db)
+        db_file = os.path.join(db, os.path.basename(db)+'.db')
+    metadata = pd.read_feather(db_file)
+    metadata[['USCG_shared', 'USCG_specific']] = [0, 0]
+
     fasta_files = []
     fasta_files = metadata.loc[metadata['accession'] == metadata[representative], ['accession', 'genome_path']].values
-    
-    out = db[:-3]
+
+    out = os.path.join(db, os.path.basename(db))
     if not os.path.isdir(out) :
         os.makedirs(out)
 
-    profiles = {}
-    alleles = {}
     with open(f"{out}.USCGs.status", "wt") as fout, gzip.open(f"{out}.USCGs.alleles.gz", 'wt') as allele_out :
-        for acc, output, n_shared, n_specific in pool.imap_unordered(process_query, [[acc, fas, reference, out, domain] for acc, fas in fasta_files ]) :
+        for idx, (acc, output, n_shared, n_specific) in enumerate(pool.imap_unordered(process_query, [[acc, fas, reference, out, domain] for acc, fas in fasta_files ])) :
+            if idx % 100 == 0 :
+                print(f'Processed {idx} genomes for USCG extraction...')
+
             fout.write(f"{acc}\t{output}\t{n_shared}\t{n_specific}\n")
+            metadata.loc[metadata['accession'] == acc, ['USCG_shared', 'USCG_specific']] = n_shared, n_specific
+
+        ani_uscgs = {}
+        for ani, n_shared, n_specific in metadata.loc[(metadata['USCG_shared'] > 0) & (metadata['accession'] == metadata[representative]), ['ANI98', 'USCG_shared', 'USCG_specific']].values :
+            if ani not in ani_uscgs :
+                ani_uscgs[ani] = []
+            ani_uscgs[ani].append([n_shared, n_specific])
+        for ani, uscg in ani_uscgs.items() :
+            ani_uscgs[ani] = np.median(uscg, axis=0) + [20, 10]
+
+        ani95_uscgs = {}
+        for ani, n_shared, n_specific in metadata.loc[(metadata['USCG_shared'] > 0) & (metadata['accession'] == metadata[representative]), ['ANI95', 'USCG_shared', 'USCG_specific']].values :
+            if ani not in ani95_uscgs :
+                ani95_uscgs[ani] = []
+            ani95_uscgs[ani].append([n_shared, n_specific])
+        for ani, uscg in ani95_uscgs.items() :
+            ani95_uscgs[ani] = np.median(uscg, axis=0) + [30, 15]
+
+
+        profiles = {}
+        alleles = {}
+        for idx, (acc, ani, ani95, n_shared, n_specific) in enumerate(metadata.loc[(metadata['USCG_shared'] >= 0) & (metadata['accession'] == metadata[representative]), ['accession', 'ANI98', 'ANI95', 'USCG_shared', 'USCG_specific']].values) :
+            if idx % 100 == 0 :
+                print(f'Processing {idx} genomes for USCG profiling...')
+
+            output = os.path.join(db, os.path.basename(db), f'{acc}.USCGs.ffn.gz')
             if domain not in ('virus', 'viral') :
-                if (n_shared >= min_shared) and (n_specific >= min_specific) :
-                    parse_uscg(acc, output, alleles, profiles, allele_out)
-            elif (n_shared < min_shared) and (n_specific < min_specific) :
+                if n_shared + n_specific >= min_uscg :
+                    if np.abs(n_shared - ani_uscgs[ani][0]) < 60 and np.abs(n_specific - ani_uscgs[ani][1]) < 30 and\
+                        np.abs(n_shared - ani95_uscgs[ani95][0]) < 90 and np.abs(n_specific - ani95_uscgs[ani95][1]) < 45 :
+                        parse_uscg(acc, output, alleles, profiles, allele_out)
+                    else :
+                        print(acc, ani, ani95, n_shared, n_specific, ani_uscgs[ani]-[20, 10], ani95_uscgs[ani95] - [30, 15], 'Skipped due to abnormal USCG counts.')
+            elif n_shared + n_specific < min_uscg :
                 parse_uscg(acc, output, alleles, profiles, allele_out)
-    
+
+    metadata.to_feather(db_file)
+    metadata.to_csv(db_file.replace('.db', '.csv'))
+
     with gzip.open(f"{out}.USCGs.profile.gz", "wt") as fout :
-        json.dump(profiles, fout)        
-    
-    cmds = ['{pigz} -cd {0}.USCGs.alleles.gz > {0}.USCGs.alleles'.format(out, **executables), 
-           '{samtools} faidx {0}.USCGs.alleles'.format(out, **executables), 
-           '{minimap2} -x sr -T20 -d {0}.USCGs.alleles.mmi {0}.USCGs.alleles'.format(out, **executables), 
+        json.dump(profiles, fout)
+
+    cmds = ['{pigz} -cd {0}.USCGs.alleles.gz > {0}.USCGs.alleles'.format(out, **executables),
+           '{samtools} faidx {0}.USCGs.alleles'.format(out, **executables),
+           '{minimap2} -x sr -T20 -d {0}.USCGs.alleles.mmi {0}.USCGs.alleles'.format(out, **executables),
            'rm {0}.USCGs.alleles'.format(out)]
     for cmd in cmds :
         subprocess.Popen(cmd, shell=True).communicate()
-    
-    
+
+
 
 def parse_uscg(acc, fn, alleles, profiles, fout) :
     seqs = readFasta(fn)

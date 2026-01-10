@@ -12,16 +12,16 @@ def check_exe(exe, external_dir='/') :
 
 
 executables = dict(
-    pigz      = check_exe('pigz') if check_exe('pigz') else check_exe('gzip'), 
-    gzip      = check_exe('gzip'), 
-    bindash   = check_exe('bindash', external_dir), 
+    pigz      = check_exe('pigz') if check_exe('pigz') else check_exe('gzip'),
+    gzip      = check_exe('gzip'),
+    bindash   = check_exe('bindash', external_dir),
     getorf    = check_exe('getorf', external_dir), #os.path.join(external_dir, 'getorf'),
-    diamond   = check_exe('diamond', external_dir), 
+    diamond   = check_exe('diamond', external_dir),
     hmmsearch = check_exe('hmmsearch', external_dir), #os.path.join(external_dir, 'hmmsearch'),
     minimap2  = check_exe('minimap2', external_dir), #os.path.join(external_dir, 'minimap2'),
     samtools  = check_exe('samtools', external_dir), #os.path.join(external_dir, 'samtools'),
     EnFlt     = check_exe('_EnFlt.py', external_dir), #os.path.join(external_dir, '_EnFlt.py'),
-    iqtree    = check_exe('iqtree', external_dir), #os.path.join(external_dir, 'iqtree'), 
+    iqtree    = check_exe('iqtree', external_dir), #os.path.join(external_dir, 'iqtree'),
 )
 
 

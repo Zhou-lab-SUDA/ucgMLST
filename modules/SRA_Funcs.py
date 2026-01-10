@@ -35,7 +35,9 @@ def get_taxonomy(metadata, acc) :
     return species, taxonomy
 
 
-def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmpdir, genome_info, uscg_info, n_reads) :
+def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmpdir, genome_info, uscg_info, n_reads, left_cuts=None) :
+    if left_cuts is None :
+        left_cuts = [0]*len(read_files)
     uscg_list = [g for g, _ in sorted(uscg_info.items(), key=lambda g:g[1])]
     uscgs = {}
     for mat, _ in matches :
@@ -49,7 +51,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
     for i, match in enumerate(matches) :
         match_reads = reads[reads.T[0] == i]
         n_diffs = np.sum(match_reads.T[3])/100.
-        
+
         species, taxonomy = get_taxonomy(metadata, match[0])
 
         results[i] = [float(match_reads.shape[0])*1000./sum([ s for g, s in genome_info[match[0]]])*1000000./n_reads,
@@ -69,10 +71,10 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
 
     outputs = {'profile':sorted(species_res.values(), reverse=True), 'OTU':sorted(results, reverse=True)}
     json.dump(outputs, open(f'{tmpdir}/profile.json', 'wt'))
-    
+
     read_details = {}
     read_id = -1
-    for fn in read_files :
+    for fn_id, fn in enumerate(read_files) :
         if fn.lower().endswith('gz') :
             p = subprocess.Popen(f"{executables['pigz']} -cd {fn}".split(), cwd=tmpdir, stdout=subprocess.PIPE, universal_newlines=True)
         else :
@@ -88,8 +90,9 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                         read_details[read_id] = [f'{rn}']
                 elif read_id in read_matches :
                     if i % 4 in (1, 3) :
-                        read_details[read_id].append(line.strip())
+                        read_details[read_id].append(line.strip()[left_cuts[fn_id]:])
         else :
+            x = 0
             for line in p.stdout :
                 if line.startswith('>') :
                     read_id += 1
@@ -97,8 +100,13 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                     if read_id in read_matches :
                         ref = matches[read_matches[read_id]][0]
                         read_details[read_id] = [f'{rn}', [], '']
+                        x = 0
                 elif read_id in read_matches :
-                    read_details[read_id][1].append(line.strip())
+                    if x == 0 :
+                        read_details[read_id][1].append(line.strip()[left_cuts[fn_id]:])
+                        x = 1
+                    else :
+                        read_details[read_id][1].append(line.strip())
         p.communicate()
 
     with gzip.open(f'{tmpdir}/primary.sam.gz', 'wt') as pout :
@@ -128,7 +136,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                         cigar[2] = f'{p[2]}S'
                     if p[1] != p[3] :
                         cigar[0] = '{0}S'.format(int(p[1]) - int(p[3]))
-                        
+
                 res = [rn, flag, f'{p[5]}__{ref}', str(int(p[7])+1), p[11], ''.join(cigar), '*', '0', '0', rs, rq] + p[12:-1]
                 pout.write('\t'.join(res)+'\n')
 
@@ -136,7 +144,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                 os.unlink(os.path.join(tmpdir, fname))
             except :
                 pass
-    subprocess.Popen(f"{executables['pigz']} -cd {tmpdir}/primary.sam.gz | {executables['samtools']} sort -m 4G -@ 8 -O bam -l 0 -T {tmpdir}/tmp - > {tmpdir}/primary.bam", 
+    subprocess.Popen(f"{executables['pigz']} -cd {tmpdir}/primary.sam.gz | {executables['samtools']} sort -m 4G -@ 8 -O bam -l 0 -T {tmpdir}/tmp - > {tmpdir}/primary.bam",
                      shell=True).communicate()
 
     os.unlink(f'{tmpdir}/primary.sam.gz')
@@ -144,7 +152,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
 
 
 
-def write_seq(output, outputs, bam, min_depth=3, min_consensus=0.8) :
+def write_seq(output, outputs, bam, min_depth=3, min_consensus=0.65) :
     sequences = {}
     prev = 0
     p = subprocess.Popen(f"{executables['samtools']} mpileup -AB {bam}".split(), universal_newlines=True, stdout=subprocess.PIPE)
@@ -160,15 +168,15 @@ def write_seq(output, outputs, bam, min_depth=3, min_consensus=0.8) :
             prev = p[1]
         s = re.sub(r'\^.', '', p[4]).upper()
         s = re.sub(r'\$', '', s)
-        s = [re.findall('^(\d*)(.+)$', ss)[0] for ss in re.split(r'[+-]', s)]
+        s = [re.findall(r'^(\d*)(.+)$', ss)[0] for ss in re.split(r'[+-]', s)]
         s = list(''.join([ s2[int(s1):] if s1 else s2 for s1, s2 in s ]))
         base, cdp = sorted(zip(*np.unique(s, return_counts=True)), key=lambda x:-x[1])[0]
         depth = len(s)
         if base in ('*', 'N') :
             base = ''
-        elif cdp < min_depth or float(cdp) < min_consensus * float(depth) :
+        elif depth < min_depth or float(cdp) < min_consensus * float(depth) :
             base = base.lower()
-        sequences[p[0]].append('n'*dist + base)
+        sequences[p[0]].append('n' * dist + base)
     seq_out = {}
     for n, s in sequences.items() :
         t = re.split(r'__', n)[1]

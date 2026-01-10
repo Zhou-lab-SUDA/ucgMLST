@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import sys, os, numpy as np, click, tempfile, subprocess, re, gzip
 try :
     import ujson as json
@@ -20,7 +19,7 @@ def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
         else :
             d = json.load(open(infile, 'rt'))
         data.append(d)
-    
+
     if not no_profile :
         profiles = {}
         for fname, d in zip(infiles, data) :
@@ -29,7 +28,7 @@ def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
                     continue
                 if p[3] not in profiles :
                     profiles[p[3]] = {'taxonomy':p[5]}
-                                        
+
                 profiles[p[3]][fname] = [p[0], p[2]]
         profiles = sorted(profiles.items(), key=lambda p:-max([ p[1].get(fn, [0,0])[0] for fn in infiles ]))
         with open(f'{output}.profile', 'wt') as fout :
