@@ -51,7 +51,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
     for i, match in enumerate(matches) :
         match_reads = reads[reads.T[0] == i]
         n_diffs = np.sum(match_reads.T[3])/100.
-
+        
         species, taxonomy = get_taxonomy(metadata, match[0])
 
         results[i] = [float(match_reads.shape[0])*1000./sum([ s for g, s in genome_info[match[0]]])*1000000./n_reads,
@@ -71,7 +71,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
 
     outputs = {'profile':sorted(species_res.values(), reverse=True), 'OTU':sorted(results, reverse=True)}
     json.dump(outputs, open(f'{tmpdir}/profile.json', 'wt'))
-
+    
     read_details = {}
     read_id = -1
     for fn_id, fn in enumerate(read_files) :
@@ -98,7 +98,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                     read_id += 1
                     rn = line[1:].strip().split()[0]
                     if read_id in read_matches :
-                        ref = matches[read_matches[read_id]][0]
+                        ref = read_matches[read_id]
                         read_details[read_id] = [f'{rn}', [], '']
                         x = 0
                 elif read_id in read_matches :
@@ -107,6 +107,9 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                         x = 1
                     else :
                         read_details[read_id][1].append(line.strip())
+            for read_id, read_info in read_details.items() :
+                read_info[1] = ''.join(read_info[1])
+                read_info[2] = 'Q' * len(read_info[1])
         p.communicate()
 
     with gzip.open(f'{tmpdir}/primary.sam.gz', 'wt') as pout :
@@ -136,7 +139,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                         cigar[2] = f'{p[2]}S'
                     if p[1] != p[3] :
                         cigar[0] = '{0}S'.format(int(p[1]) - int(p[3]))
-
+                        
                 res = [rn, flag, f'{p[5]}__{ref}', str(int(p[7])+1), p[11], ''.join(cigar), '*', '0', '0', rs, rq] + p[12:-1]
                 pout.write('\t'.join(res)+'\n')
 
@@ -144,7 +147,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
                 os.unlink(os.path.join(tmpdir, fname))
             except :
                 pass
-    subprocess.Popen(f"{executables['pigz']} -cd {tmpdir}/primary.sam.gz | {executables['samtools']} sort -m 4G -@ 8 -O bam -l 0 -T {tmpdir}/tmp - > {tmpdir}/primary.bam",
+    subprocess.Popen(f"{executables['pigz']} -cd {tmpdir}/primary.sam.gz | {executables['samtools']} sort -m 4G -@ 8 -O bam -l 0 -T {tmpdir}/tmp - > {tmpdir}/primary.bam", 
                      shell=True).communicate()
 
     os.unlink(f'{tmpdir}/primary.sam.gz')

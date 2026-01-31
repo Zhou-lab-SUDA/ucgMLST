@@ -49,7 +49,7 @@ def each_minimap(data) :
         p[11], p[12] = p[-1][5:], int(p[14][5:])
         res.append(p[:13])
     res.sort(key=lambda x:(x[5], -x[12]))
-
+    
     res_seqs = {}
     for p in res :
         if p[5] in res_seqs :
@@ -127,7 +127,7 @@ def minimap_align(tmpdir, metadata, profiles, uscgs, genomes, min_identity, min_
 
             if len(qryseqs) % 100 == 0 :
                 logging.info(f'Extracted {len(qryseqs)} USCGs from both the db and the samples.')
-
+        
     logging.info(f'Identified {len(concatenated_seqs)} samples with good sequences.')
     aln_file = os.path.join(tmpdir, 'USCG_align.fas')
     with open(aln_file, 'w') as fout :
@@ -166,7 +166,7 @@ def readJson(dat) :
     return items
 
 
-def extract_reference(reference, dbname, module, genus) :
+def extract_reference(reference, dbname, module, representative, genus) :
     if module == 'auto' :
         modules = [os.path.join(dname, os.path.basename(dname)) for dname in glob.glob(os.path.join(dbname, '*'))]
     else :
@@ -187,7 +187,7 @@ def extract_reference(reference, dbname, module, genus) :
         records = {reference:0}
         profiles = json.load(gzip.open(f'{module}.USCGs.profile.gz'))
         ref = metadata.loc[reference]
-
+    
         for field in ('ANI99', 'ANI98', 'ANI95') :
             for rec in metadata.loc[metadata[field] == ref[field]].index :
                 if rec in profiles and rec not in records :
@@ -210,7 +210,7 @@ def extract_reference(reference, dbname, module, genus) :
         profile = {idx:profiles[idx] for idx in index}
         alleles = {allele:[] for alleles in profile.values() for allele in alleles}
 
-        p = subprocess.Popen(f'pigz -cd {module}.USCGs.alleles.gz'.split(), stdout=subprocess.PIPE, universal_newlines=True)
+        p = subprocess.Popen(f'pigz -cd {module}.{representative}.USCGs.alleles.gz'.split(), stdout=subprocess.PIPE, universal_newlines=True)
         for line in p.stdout :
             if line.startswith('>') :
                 n = line[1:].strip()
@@ -219,10 +219,10 @@ def extract_reference(reference, dbname, module, genus) :
             elif n != '' :
                 alleles[n].append(line.strip())
         profile = {idx:{ g:''.join(alleles[g]) for g in prof } for idx, prof in profile.items() }
-
+        profile = {idx:prof for idx, prof in profile.items() if all([len(s) > 0 for s in prof.values()])}
         return metadata.loc[index], profile
     return None, None
-
+    
 
 
 def get_reference(ref, uscgs) :
@@ -238,6 +238,7 @@ def get_reference(ref, uscgs) :
 @click.argument('uscg_files', nargs=-1)
 @click.option('-d', '--dbname', help='absolute path of the database. [required]', default="/titan/databases/ncbi_20251109")
 @click.option('-m', '--module', help='modules in the database. [default: auto detect]', default='auto')
+@click.option('-r', '--representative', help='name of the representatives [default: ANI99]', default='ANI99')
 @click.option('-r', '--reference', help='reference genome, can be one of accession_code, tax_code, or species_name. [required]', required=True)
 @click.option('--min_identity', help='minumum identity of a sequence comparing to ref_acc. default: 0.93 [0. - 1.]', default=None, type=float)
 @click.option('-p', '--min_presence', help='minumum coverages of genes for a query strain to be evaluated. [default: 0.1]', default=0.1, type=float)
@@ -250,17 +251,17 @@ def get_reference(ref, uscgs) :
 @click.option('-u', '--uscg_list', help='list of uscgs as a file [default: None]', default='')
 @click.option('-o', '--outdir', help='folder storing outputs.', required=True)
 @click.option('-n', '--n_proc', help='number of processes [default: 8]', default=8, type=int)
-def main(uscg_files, dbname, module, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db) :
-    genoPhylo(uscg_files, dbname, module, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db)
+def main(uscg_files, dbname, module, representative, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db) :
+    genoPhylo(uscg_files, dbname, module, representative, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db)
 
-def genoPhylo(uscg_files, dbname, module, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db) :
+def genoPhylo(uscg_files, dbname, module, representative, reference, min_identity, min_presence, min_presence_ref, genus, no_db, genome_list, uscg_list, outdir, n_proc, no_risky, resolve_db) :
     pool = Pool(n_proc)
-
+    
     if min_identity == None :
-        min_identity = 0.8 if genus else 0.93
+        min_identity = 0.8 if genus else 0.94
     if min_presence_ref == None :
         min_presence_ref = 0.45 if genus else 0.75
-
+    
     if min_identity <= 1 :
         min_identity *= 100.
 
@@ -280,7 +281,7 @@ def genoPhylo(uscg_files, dbname, module, reference, min_identity, min_presence,
             uscg_cnt[acc] = uscg_cnt.get(acc, 0) + len(uscg)
         reference, _ = max(uscg_cnt.items(), key=lambda n:n[1])
         logging.info(f'Kept {len(uscgs)} sets of USCGs after initial filtering.')
-    metadata, profiles = extract_reference(reference, dbname, module, genus)
+    metadata, profiles = extract_reference(reference, dbname, module, representative, genus)
     logging.info(f'Extract {len(profiles)} sets of USCGs from the main database.')
 
     genome_lists = [genome_list, os.path.join(resolve_db, 'genome.list')]

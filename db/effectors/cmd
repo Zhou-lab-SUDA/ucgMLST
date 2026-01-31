@@ -1,0 +1,4 @@
+wget https://ftp.ncbi.nlm.nih.gov/pathogen/Antimicrobial_resistance/AMRFinderPlus/database/4.0/2025-07-16.1/AMR_CDS.fa
+wget https://www.mgc.ac.cn/VFs/Down/VFDB_setB_nt.fas.gz
+(gzip -cd VFDB_setB_nt.fas.gz;cat AMR_CDS.fa > effectors.fas
+usearch -cluster_smallmem effectors.fas -centroids effectors.centroid.fas --id 1.0 -sortedby other

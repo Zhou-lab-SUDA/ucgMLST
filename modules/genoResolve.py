@@ -24,8 +24,8 @@ def log_binom(a, b, p):
     # Avoid log(0!) issues
     log_comb = np.zeros_like(a, dtype=float)
     # mask = n > 0
-    # log_comb[mask] = (gammaln(n[mask] + 1) -
-    #                   gammaln(a[mask] + 1) -
+    # log_comb[mask] = (gammaln(n[mask] + 1) - 
+    #                   gammaln(a[mask] + 1) - 
     #                   gammaln(b[mask] + 1))
     return log_comb + xlogy(a, p) + xlogy(b, 1.0 - p)
 
@@ -67,7 +67,7 @@ def get_sites(aln_fas, nwk):
                 x = [0., 0., 0., 0.]
                 x[base] = 1.
                 nodes[p[0]].append(x)
-        base_encoding = {'A':[1., 0., 0., 0.], 'C':[0., 1., 0., 0.],
+        base_encoding = {'A':[1., 0., 0., 0.], 'C':[0., 1., 0., 0.], 
                          'G':[0., 0., 1., 0.], 'T':[0., 0., 0., 1.]}
         for n, s in zip(names, vseqs):
             nodes[n] = [base_encoding.get(b, [0., 0., 0., 0.]) for b in s]
@@ -83,7 +83,7 @@ def get_sites(aln_fas, nwk):
 def map_qry(aln_fas, profiles, sites):
     """Map query sequences to reference alignment using minimap2"""
     aligns = {}
-
+    
     with tempfile.TemporaryDirectory(prefix='se_', dir='.') as tmpdir:
         with open(os.path.join(tmpdir, 'ref'), 'wt') as fout:
             n, s = list(aln_fas.items())[0]
@@ -111,18 +111,18 @@ def map_qry(aln_fas, profiles, sites):
                 p[1:4] = [int(p[1]), int(p[2]) + 1, int(p[3])]
                 p[6:9] = [int(p[6]), int(p[7]) + 1, int(p[8])]
                 alns.append(p)
-
+        
         x0 = 0
         for p in sorted(alns, key=lambda x:x[7]):
             taxon, ref, contig = p[0].split('|', 2)
             if (taxon, ref) not in aligns:
-                aligns[(taxon, ref)] = [[s[0], []] for s in sites]
+                aligns[(taxon, ref)] = [[s[0], []] for s in sites]            
 
             if p[4] == '+':
                 qi, ri, cigar, d = p[2], p[7], p[-1][5:], 1
             else:
                 qi, ri, cigar, d = p[3], p[7], p[-1][5:], -1
-
+            
             while x0 < len(sites) and sites[x0][0] < ri:
                 x0 += 1
             xi = x0
@@ -220,25 +220,25 @@ def analyze_read_support_distribution(genotypes, new_genotypes, existing_genotyp
     genotypes = genotypes[diff_sites]
     new_states = new_states[:, diff_sites].max(0)
     existing_states = (1. - new_states) if len(existing_genotypes) == 0 else np.array([states[g] for g in existing_genotypes])[:, diff_sites].max(0)
-
+    
     new_state_reads = (genotypes * new_states).sum(axis = 1)
     other_state_reads = (genotypes * existing_states).sum(axis = 1)
     total_reads = new_state_reads + other_state_reads
-
+    
     if total_reads.sum() < 1 :
         return -np.inf, 0.0, 0.0
-
+    
     pA = np.sum(new_state_reads)/np.sum(total_reads)
     pA = 0.9 if pA > 0.5 else 0.1
-
+        
     logit_prior = np.log(pi_flip) - np.log(1.0 - pi_flip)
-
+    
     for i in range(max_iter) :
         logL_normal = log_binom(new_state_reads, other_state_reads, pA)
         logL_flipped = log_binom(new_state_reads, other_state_reads, 1.0 - pA)
 
         logLR = logL_flipped - logL_normal
-
+        
         # Posterior probability of flip given data
         rate = np.clip(-(logit_prior + logLR), -300, 300)
         p_flip = 1 / (1 + np.exp(rate))
@@ -248,12 +248,12 @@ def analyze_read_support_distribution(genotypes, new_genotypes, existing_genotyp
         if abs(pA_corr - pA) < tol:
             break
         pA = np.clip(pA_corr, tol, 1 - tol)
-
+    
     # log-sum-exp for mixture likelihood
     mean_p_flip = np.mean(p_flip)
     log_mix = np.logaddexp(np.log(1.0 - mean_p_flip) + logL_normal, np.log(mean_p_flip) + logL_flipped)
     log_likelihood = np.sum(log_mix)
-
+    
     return log_likelihood, pA, np.mean(p_flip)
 
 
@@ -266,7 +266,7 @@ def fit_model_em(samples, states, lineages, pi_flip=0.05, tol=1e-6):
         per_base_sum = genotypes.sum(0)
         per_base_sum[per_base_sum == 0] = 1e-10
         genotypes = genotypes/per_base_sum
-
+        
         for lineage, genotype, res in zip(lineages, genotypes, results) :
             geno_reads = np.sum(samples * genotype, 1)
             other_reads = np.sum(samples, 1) - geno_reads
@@ -278,7 +278,7 @@ def fit_model_em(samples, states, lineages, pi_flip=0.05, tol=1e-6):
             logL_flipped = log_binom(geno_reads, other_reads, 1.0 - res[1])
 
             logLR = logL_flipped - logL_normal
-
+                
             # Posterior probability of flip given data
             rate = np.clip(-(logit_prior + logLR), -300, 300)
             p_flip = 1 / (1 + np.exp(rate))
@@ -286,7 +286,7 @@ def fit_model_em(samples, states, lineages, pi_flip=0.05, tol=1e-6):
             A_corr = (1 - p_flip) * geno_reads + p_flip * other_reads
             p_corr = np.sum(A_corr)/np.sum(samples)
             res[1] = np.clip(p_corr, tol, 1 - tol)
-
+            
             # log-sum-exp for mixture likelihood
             mean_p_flip = np.mean(p_flip)
             log_mix = np.logaddexp(np.log(1.0 - mean_p_flip) + logL_normal, np.log(mean_p_flip) + logL_flipped)
@@ -305,7 +305,7 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
     cov = np.sum(genotypes, axis=1)
     if np.sum(cov) == 0:
         return []
-
+    
     median_cov = np.median(cov)
     site_weights = np.clip(cov / (median_cov + 1e-10), 0, 3) * median_cov
 
@@ -315,7 +315,7 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
 
     genotypes = (genotypes[mask] / cov[mask][:, None] * site_weights[mask][:, None]+0.5).astype(int)
     states = {k: v[mask] for k, v in states.items()}
-
+    
     n_sites = genotypes.shape[0]
     logger.info(f"Retained {np.sum(mask)}/{len(mask)} sites after filtering")
 
@@ -330,14 +330,14 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
     for iteration in range(max_nGenotype):
         logger.info(f"Iteration {iteration + 1}/{max_nGenotype}")
         new_beam = []
-
+        
         for model in beam:
             accepted_genotypes = model["lineages"]
 
             for lineage, state in states.items():
                 if lineage in accepted_genotypes:
                     continue
-
+                
                 test_lineages = accepted_genotypes + [lineage]
 
                 results, loglik = fit_model_em(genotypes, states, test_lineages, pi_flip=pi_flip)
@@ -386,7 +386,7 @@ def refine_proportions_em(genotypes, states, lineages, pi_flip: float = 0.05, ma
     p_sum = np.sum([r[1] for r in results])
     for r in results:
         r[1] = np.clip(r[1] / p_sum, tol, 1 - tol) if p_sum > 0 else 1.0 / K
-    return results
+    return results 
 
 
 def reconstruct_genotype_sequences(bam, ref_acc, sites, best_model, min_posterior=0.9):
@@ -506,12 +506,12 @@ def explore(resolve_db, query, ref, outdir, num_genotype, min_freq, beam_width, 
         return
 
     sites = parse_bam(bam, taxon, sites)
-
+    
     genotypes = np.array([s[1] for s in sites])
     best_model = estimate(genotypes, nodes, tre, num_genotype, min_freq, beam_width, p_flip)
-
+    
     logger.info(f'Writing {len(best_model)} OTUs.')
-
+        
     if len(best_model) == 0:
         json.dump(res, open(prefix + '.json', 'wt'))
         return
@@ -545,7 +545,7 @@ def explore(resolve_db, query, ref, outdir, num_genotype, min_freq, beam_width, 
                     m[2], otu[3], genotype_id, otu[5],
                     seq])
             res['OTU'].extend(otus)
-
+    
     for i, otu in enumerate(res['OTU']):
         if otu[4] not in strains:
             strains[otu[4]] = []
@@ -571,7 +571,7 @@ def explore(resolve_db, query, ref, outdir, num_genotype, min_freq, beam_width, 
                 parent.add_child(new0)
                 new0.add_child(new1)
                 new0.add_child(node)
-
+    
     tre.write(format=1, outfile=f'{prefix}.nwk')
     logger.info('Done.')
 

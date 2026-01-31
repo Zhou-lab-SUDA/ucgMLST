@@ -6,12 +6,14 @@ except :
 
 @click.command()
 @click.option('-o', '--output', help='prefix for the outputs. Default: genoComplie', default='genoComplie')
-@click.option('-m', '--min_rpkm', help='minimum level of RPKM to report. Default: 0.01', default=0.01, type=float)
-@click.option('-M', '--min_ani', help='minimum level of ANI to report. Default: 0.95', default=0.95, type=float)
+@click.option('-m', '--min_rpkm', help='minimum level of RPKM to report. Default: 0.001', default=0.001, type=float)
+@click.option('-M', '--min_ani', help='minimum level of ANI to report. Default: 0.96', default=0.96, type=float)
 @click.option('-p', '--no_profile', help='do NOT show comparison of taxa profiles.', default=False, is_flag=True)
 @click.option('-u', '--otu', help='show comparison of OTUs.', default=False, is_flag=True)
 @click.argument('infiles', nargs=-1)
 def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
+    if min_ani < 1 :
+        min_ani *= 100
     data = []
     for infile in infiles :
         if os.path.isfile(os.path.join(infile, 'profile.json')) :
@@ -19,7 +21,7 @@ def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
         else :
             d = json.load(open(infile, 'rt'))
         data.append(d)
-
+    
     if not no_profile :
         profiles = {}
         for fname, d in zip(infiles, data) :
@@ -28,7 +30,7 @@ def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
                     continue
                 if p[3] not in profiles :
                     profiles[p[3]] = {'taxonomy':p[5]}
-
+                                        
                 profiles[p[3]][fname] = [p[0], p[2]]
         profiles = sorted(profiles.items(), key=lambda p:-max([ p[1].get(fn, [0,0])[0] for fn in infiles ]))
         with open(f'{output}.profile', 'wt') as fout :

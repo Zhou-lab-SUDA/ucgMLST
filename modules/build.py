@@ -30,13 +30,13 @@ def get_sketches(metadata_tab, dbname, module, cutoff, threads, batch_num=4000) 
     metadata_tab['ANI95'] = metadata_tab['accession']
     metadata_tab['ANI98'] = metadata_tab['accession']
     metadata_tab['ANI99'] = metadata_tab['accession']
-
+    
     sketch_dir = os.path.join(dbname, 'sketches')
     makedirs(sketch_dir)
-
+    
     ids = np.arange(0, metadata_tab.shape[0], batch_num)
     data_ids = {fn:id for fn, id in zip(metadata_tab['genome_path'], metadata_tab.index)}
-
+    
     for idx, i in enumerate(ids) :
         results = run_bindash(metadata_tab[i:i+batch_num], ids[:idx+1], data_ids, dbname, module, threads)
         logging.info(f'Run bindash on genomes {i}')
@@ -63,7 +63,7 @@ def get_sketches(metadata_tab, dbname, module, cutoff, threads, batch_num=4000) 
     for ani99, taxa in ani99_taxa.items() :
         sorted_taxa = sorted(taxa.items(), key=lambda x:(x[0].startswith('n__GTDB'), x[1], x[0]), reverse=True)
         ani99_taxa[ani99] = sorted_taxa[0][0]
-
+    
     metadata_tab.loc[metadata_tab['taxonomy'].str.startswith('n__NCBI'), 'taxonomy'] = [ani99_taxa[ani99] for ani99 \
         in metadata_tab.loc[metadata_tab['taxonomy'].str.startswith('n__NCBI'), 'ANI99'].values]
 
@@ -76,7 +76,7 @@ def get_sketches(metadata_tab, dbname, module, cutoff, threads, batch_num=4000) 
     for ani98, taxa in ani98_taxa.items() :
         sorted_taxa = sorted(taxa.items(), key=lambda x:(x[0].startswith('n__GTDB'), x[1], x[0]), reverse=True)
         ani98_taxa[ani98] = sorted_taxa[0][0]
-
+    
     metadata_tab.loc[metadata_tab['taxonomy'].str.startswith('n__NCBI'), 'taxonomy'] = [ani98_taxa[ani98] for ani98 \
         in metadata_tab.loc[metadata_tab['taxonomy'].str.startswith('n__NCBI'), 'ANI98'].values]
 
@@ -123,7 +123,7 @@ def run_bindash(data, ids, data_ids, dbname, module, threads) :
                         links[qi] = [ri, d]
         except :
             pass
-
+    
     results = [ [i] + links.get(i, [-1, 1]) for i in data.index]
     return results
 
@@ -137,12 +137,12 @@ def read_queries(queries, genome) :
         query.columns = ['accession'] + query.columns[1:].tolist()
         query['genome_path'] = [genome_files.get(acc, '') for acc in query['accession']]
         query = query.loc[query['genome_path'] != '']
-
+        
         if 'excluded_from_refseq' in query.columns :
             problems = ('partial', 'contaminated', 'genome length too', 'sequence duplications', 'chimeric', 'hybrid', 'partial', 'mixed culture', 'completeness check')
             idx = [ not any([p in clause for p in problems]) for clause in query['excluded_from_refseq'] ]
             query = query.loc[idx]
-
+        
         query['score'] = 0
         if 'relation_to_type_material' in query.columns :
             query.loc[query['relation_to_type_material'] != 'na', 'score'] += 16
@@ -152,12 +152,12 @@ def read_queries(queries, genome) :
         if 'assembly_level' in query.columns :
             query.loc[query['assembly_level'] == 'Complete Genome', 'score'] += 2
             query.loc[query['assembly_level'] == 'Chromosome', 'score'] += 1
-
+        
         if 'scaffold_count' in query.columns :
             query = query.sort_values(by=['score', 'scaffold_count'], ascending=False)
         else :
             query = query.sort_values(by=['score'], ascending=False)
-
+        
         if 'species_taxid' not in query.columns :
             query['species_taxid'] = ''
         if 'taxonomy' not in query.columns :
@@ -250,7 +250,7 @@ def prepare_taxa(dbname, genbank, gtdb, metadata_tab) :
         elif 'GB_GCA' + acc[3:] in gtdb_taxa :
             return gtdb_taxa['GB_GCA' + acc[3:]]
         return ncbi_taxa.get(dat['species_taxid'], dat['organism_name'])
-
+    
     metadata_tab['taxonomy'] = [try_gtdb(dat).replace(' ', '_') for acc, dat in metadata_tab.iterrows()]
     metadata_tab.loc[metadata_tab['taxonomy'].str.startswith('n__GTDB'), 'score'] += 3
     return metadata_tab.sort_values(by=['score'], ascending=False).reset_index(drop=True)
