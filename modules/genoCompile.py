@@ -5,16 +5,19 @@ except :
     import json
 
 @click.command()
+@click.option('-l', '--json_list', help='list file of json files to compare. Default: None', default=None, type=click.File('rt'))
 @click.option('-o', '--output', help='prefix for the outputs. Default: genoComplie', default='genoComplie')
 @click.option('-m', '--min_rpkm', help='minimum level of RPKM to report. Default: 0.001', default=0.001, type=float)
 @click.option('-M', '--min_ani', help='minimum level of ANI to report. Default: 0.96', default=0.96, type=float)
 @click.option('-p', '--no_profile', help='do NOT show comparison of taxa profiles.', default=False, is_flag=True)
 @click.option('-u', '--otu', help='show comparison of OTUs.', default=False, is_flag=True)
 @click.argument('infiles', nargs=-1)
-def main(infiles, output, no_profile, otu, min_rpkm, min_ani) :
+def main(infiles, json_list, output, no_profile, otu, min_rpkm, min_ani) :
     if min_ani < 1 :
         min_ani *= 100
     data = []
+    if json_list is not None :
+        infiles = list(infiles) + [l.strip() for l in json_list.readlines() if l.strip()]
     for infile in infiles :
         if os.path.isfile(os.path.join(infile, 'profile.json')) :
             d = json.load(open(os.path.join(infile, 'profile.json'), 'rt'))

@@ -1,7 +1,6 @@
 import os, ete3, numpy as np, subprocess, click, tempfile, pickle, json, re
 import configure
 from scipy.special import gammaln, xlogy, logsumexp
-from typing import List, Tuple, Dict
 import warnings
 warnings.filterwarnings('ignore')
 import logging
@@ -18,20 +17,24 @@ executables = configure.executables
 rc = configure.rc
 
 
-def log_binom(a, b, p):
-    """Complete log Binomial(a | a+b, p) with combinatorial term"""
+def get_log_comb(a, b) :
+    """Log combinatorial term for Binomial distribution"""
     n = a + b
-    # Avoid log(0!) issues
     log_comb = np.zeros_like(a, dtype=float)
-    # mask = n > 0
-    # log_comb[mask] = (gammaln(n[mask] + 1) - 
-    #                   gammaln(a[mask] + 1) - 
-    #                   gammaln(b[mask] + 1))
-    return log_comb + xlogy(a, p) + xlogy(b, 1.0 - p)
+    mask = n > 0
+    log_comb[mask] = (gammaln(n[mask] + 1) -
+                    gammaln(a[mask] + 1) -
+                    gammaln(b[mask] + 1))
+    return log_comb
 
-# def log_binom(a, b, p):
-#     """Stable log Binomial(a | a+b, p) without combinatorial term"""
-#     return xlogy(a, p) + xlogy(b, 1.0 - p)
+
+def log_binom(a, b, p, log_comb=None):
+    """Complete log Binomial(a | a+b, p) with combinatorial term"""
+    p = np.clip(p, 1e-12, 1 - 1e-12)
+   
+    res = xlogy(a, p) + xlogy(b, 1.0 - p)
+    res += log_comb if log_comb is not None else get_log_comb(a, b)
+    return res
 
 
 def get_sites(aln_fas, nwk):
@@ -67,7 +70,7 @@ def get_sites(aln_fas, nwk):
                 x = [0., 0., 0., 0.]
                 x[base] = 1.
                 nodes[p[0]].append(x)
-        base_encoding = {'A':[1., 0., 0., 0.], 'C':[0., 1., 0., 0.], 
+        base_encoding = {'A':[1., 0., 0., 0.], 'C':[0., 1., 0., 0.],
                          'G':[0., 0., 1., 0.], 'T':[0., 0., 0., 1.]}
         for n, s in zip(names, vseqs):
             nodes[n] = [base_encoding.get(b, [0., 0., 0., 0.]) for b in s]
@@ -80,10 +83,10 @@ def get_sites(aln_fas, nwk):
                 nodes[n.name][mask] = nodes[n.up.name][mask]
     return nodes, [[s, []] for s in sites], tre
 
-def map_qry(aln_fas, profiles, sites):
+def map_qry(aln_fas, profiles):
     """Map query sequences to reference alignment using minimap2"""
     aligns = {}
-    
+   
     with tempfile.TemporaryDirectory(prefix='se_', dir='.') as tmpdir:
         with open(os.path.join(tmpdir, 'ref'), 'wt') as fout:
             n, s = list(aln_fas.items())[0]
@@ -111,48 +114,42 @@ def map_qry(aln_fas, profiles, sites):
                 p[1:4] = [int(p[1]), int(p[2]) + 1, int(p[3])]
                 p[6:9] = [int(p[6]), int(p[7]) + 1, int(p[8])]
                 alns.append(p)
-        
+       
         x0 = 0
         for p in sorted(alns, key=lambda x:x[7]):
             taxon, ref, contig = p[0].split('|', 2)
             if (taxon, ref) not in aligns:
-                aligns[(taxon, ref)] = [[s[0], []] for s in sites]            
+                aligns[(taxon, ref)] = {}
 
-            if p[4] == '+':
-                qi, ri, cigar, d = p[2], p[7], p[-1][5:], 1
-            else:
-                qi, ri, cigar, d = p[3], p[7], p[-1][5:], -1
-            
-            while x0 < len(sites) and sites[x0][0] < ri:
-                x0 += 1
-            xi = x0
+            if p[4] == '-':
+                continue
+            qi, ri, cigar, d = p[2], p[7], p[-1][5:], 1
+           
             for s, t in re.findall(r'(\d+)([MDI])', cigar):
                 s = int(s)
-                if t != 'I':
-                    rj = ri + s
-                if t != 'D':
-                    qj = qi + s * d
-                while xi < len(sites) and sites[xi][0] >= ri and sites[xi][0] < rj:
-                    rd = sites[xi][0] - ri
-                    rx = ri + (rd if t != 'I' else 0) - 1
-                    qx = qi + (rd * d if t != 'D' else 0) - 1
-                    rseq = ref_seq[p[5]][rx]
-                    qseq = qry_seq[contig][qx] if d > 0 else configure.rc(qry_seq[contig][qx])
-                    if qseq != '-':
-                        rr = aligns[(taxon, ref)][xi][1]
-                        if len(rr) == 0 or rr[5] < p[10]:
-                            aligns[(taxon, ref)][xi][1] = [contig, qx + d, rseq, qseq, p[9], p[10], p[4]]
-                    xi += 1
-                ri, qi = rj, qj
+                if t != 'I' and t != 'D' :
+                    for x in range(0, s) :
+                        rx = ri + x
+                        qx = qi + x
+                        rseq = ref_seq[p[5]][rx-1]
+                        qseq = qry_seq[contig][qx-1]
+                        if qseq != '-':
+                            rr = aligns[(taxon, ref)].get(rx, [])
+                            if len(rr) == 0 or rr[5] < p[10]:
+                                aligns[(taxon, ref)][rx] = [contig, qx, rseq, qseq, p[9], p[10], p[4]]
+                if t != 'I' :
+                    ri += s
+                if t != 'D' :
+                    qi += s
             qry_seq[contig][p[2]-1:p[3]] = ['-'] * (p[3] - p[2] + 1)
 
-    taxon = max([[sum([len(a[1]) > 0 for a in aln]), key[0], key[1]] for key, aln in aligns.items()])[1]
-    sites = [a[:2] for key, aln in aligns.items() if key[0] == taxon for a in aln]
+    taxon = max([[len(aln), key[0], key[1]] for key, aln in aligns.items()])[1]
+    sites = [[site, a] for key, aln in aligns.items() if key[0] == taxon for site, a in aln.items()]
     return taxon, sites
 
 
-def parse_bam(bam, taxon, sites):
-    """Parse BAM file to extract base compositions at variant sites"""
+def parse_bam(bam, sites):
+    """Parse BAM file to extract base compositions at all sites"""
     base_comp = {}
     contigs = {}
     if bam:
@@ -197,115 +194,65 @@ def parse_bam(bam, taxon, sites):
     return sorted(results.items())
 
 
-def identify_differentiating_sites(new, existing, states, genotypes):
-    if not existing:
-        return np.sum(genotypes, axis=1) > 0
-
-    new_state = states[new[0]].argmax(1)
-    existing_state = np.vstack([states[g].argmax(1) for g in existing])
-
-    return np.all(existing_state != new_state, axis=0) & (np.sum(genotypes, axis=1) > 0)
-
-
-def analyze_read_support_distribution(genotypes, new_genotypes, existing_genotypes, states, diff_sites, pi_flip = 0.05, max_iter = 100, tol = 1e-6):
-    """
-    Analyze the distribution of read support at differentiating sites to detect recombination.
-    """
-    if np.sum(diff_sites) == 0:
-        return -np.inf, 0.0, 0.0
-
-    new_states = np.array([states[new_genotype] for new_genotype in new_genotypes])
-    # existing_states = (1. - new_states) if len(existing_genotypes) == 0 else np.array([states[g] for g in existing_genotypes])
-
-    genotypes = genotypes[diff_sites]
-    new_states = new_states[:, diff_sites].max(0)
-    existing_states = (1. - new_states) if len(existing_genotypes) == 0 else np.array([states[g] for g in existing_genotypes])[:, diff_sites].max(0)
-    
-    new_state_reads = (genotypes * new_states).sum(axis = 1)
-    other_state_reads = (genotypes * existing_states).sum(axis = 1)
-    total_reads = new_state_reads + other_state_reads
-    
-    if total_reads.sum() < 1 :
-        return -np.inf, 0.0, 0.0
-    
-    pA = np.sum(new_state_reads)/np.sum(total_reads)
-    pA = 0.9 if pA > 0.5 else 0.1
-        
+def fit_model_em(samples, states, lineages, pi_flip=0.05, max_iter=100, tol=1e-6):
+    K = len(lineages)
     logit_prior = np.log(pi_flip) - np.log(1.0 - pi_flip)
-    
-    for i in range(max_iter) :
-        logL_normal = log_binom(new_state_reads, other_state_reads, pA)
-        logL_flipped = log_binom(new_state_reads, other_state_reads, 1.0 - pA)
+   
+    site_reads = np.sum(samples, 1)
+    geno_states = np.stack([states[l] for l in lineages], axis=0).astype(np.float32)
+    remain_reads = site_reads - (samples*geno_states.any(0)).sum(1) # sites not covered by any known lineage
+
+    p_vec = np.clip(np.arange(K+1, 0, -1)/((K+2)*(K+1)*0.5), tol, 1 - tol)
+    r_vec = np.zeros(K+1)
+
+    ll = -np.inf
+    for ite in range(max_iter) :
+        genotypes = geno_states * p_vec[:-1, None, None]
+        per_base_sum = np.clip(genotypes.sum(0), 1e-12, None)
+        genotypes /= per_base_sum
+       
+        geno_reads = np.einsum("ij,kij->ki", samples, genotypes, optimize=True)
+        total_reads = np.vstack([geno_reads, [remain_reads]])
+
+        other_reads = site_reads-total_reads
+        log_comb = get_log_comb(total_reads, other_reads)
+        logL_normal = log_binom(total_reads, other_reads, p_vec[:, None], log_comb)
+        logL_flipped = log_binom(total_reads, other_reads, 1.0 - p_vec[:, None], log_comb)
 
         logLR = logL_flipped - logL_normal
-        
         # Posterior probability of flip given data
         rate = np.clip(-(logit_prior + logLR), -300, 300)
         p_flip = 1 / (1 + np.exp(rate))
 
-        A_corr = (1 - p_flip) * new_state_reads + p_flip * other_state_reads
-        pA_corr = np.sum(A_corr)/np.sum(total_reads)
-        if abs(pA_corr - pA) < tol:
-            break
-        pA = np.clip(pA_corr, tol, 1 - tol)
-    
-    # log-sum-exp for mixture likelihood
-    mean_p_flip = np.mean(p_flip)
-    log_mix = np.logaddexp(np.log(1.0 - mean_p_flip) + logL_normal, np.log(mean_p_flip) + logL_flipped)
-    log_likelihood = np.sum(log_mix)
-    
-    return log_likelihood, pA, np.mean(p_flip)
+        # log-sum-exp for mixture likelihood
+        r_vec = np.mean(p_flip, 1)
+        log_mix = np.logaddexp(np.log(1.0 - r_vec)[:, None] + logL_normal, np.log(r_vec)[:, None] + logL_flipped)
 
+        A_corr = (1 - p_flip) * total_reads + p_flip * other_reads
+        p_corr = np.sum(A_corr, 1)/np.sum(site_reads)
+        p_vec = np.clip(p_corr/p_corr.sum(), tol, 1 - tol)
 
-def fit_model_em(samples, states, lineages, pi_flip=0.05, tol=1e-6):
-    results = refine_proportions_em(samples, states, lineages, pi_flip, tol=tol)
-
-    ll = -np.inf
-    for ite in range(100) :
-        genotypes = [ states[lineage] for lineage in lineages ] * np.array([r[1] for r in results])[:, None, None]
-        per_base_sum = genotypes.sum(0)
-        per_base_sum[per_base_sum == 0] = 1e-10
-        genotypes = genotypes/per_base_sum
-        
-        for lineage, genotype, res in zip(lineages, genotypes, results) :
-            geno_reads = np.sum(samples * genotype, 1)
-            other_reads = np.sum(samples, 1) - geno_reads
-
-            logit_prior = np.log(pi_flip) - np.log(1.0 - pi_flip)
-
-            # for i in range(100) :
-            logL_normal = log_binom(geno_reads, other_reads, res[1])
-            logL_flipped = log_binom(geno_reads, other_reads, 1.0 - res[1])
-
-            logLR = logL_flipped - logL_normal
-                
-            # Posterior probability of flip given data
-            rate = np.clip(-(logit_prior + logLR), -300, 300)
-            p_flip = 1 / (1 + np.exp(rate))
-
-            A_corr = (1 - p_flip) * geno_reads + p_flip * other_reads
-            p_corr = np.sum(A_corr)/np.sum(samples)
-            res[1] = np.clip(p_corr, tol, 1 - tol)
-            
-            # log-sum-exp for mixture likelihood
-            mean_p_flip = np.mean(p_flip)
-            log_mix = np.logaddexp(np.log(1.0 - mean_p_flip) + logL_normal, np.log(mean_p_flip) + logL_flipped)
-            res[0] = np.sum(log_mix)
-            res[2] = np.mean(p_flip)
-        new_ll = np.sum([r[0] for r in results])
-        if abs(new_ll - ll) < 1e-6 :
+        # ---------- log-likelihood ----------
+        new_ll = np.sum(log_mix)
+        if abs(new_ll - ll) < tol :
             break
         ll = new_ll
-    print(results)
-    return results, new_ll
+
+    x = (geno_states * (1-p_flip[:-1])[:, :, None])
+    base_content = x + (1-geno_states)*(1-np.sum(x, 2)[:, :, None])/3
+    results = []
+    for k, lineage in enumerate(lineages):
+        results.append([p_vec[k], r_vec[k], lineage])
+    # print(results, new_ll)
+    return results, new_ll, base_content, p_corr[-1]
 
 
-def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_flip=0.05, min_bic_improvement=10):
+def estimate(genotypes, states, max_nGenotype, min_rate=0.02, beam_width=3, pi_flip=0.05, min_bic_improvement=10):
 
     cov = np.sum(genotypes, axis=1)
     if np.sum(cov) == 0:
         return []
-    
+   
     median_cov = np.median(cov)
     site_weights = np.clip(cov / (median_cov + 1e-10), 0, 3) * median_cov
 
@@ -315,7 +262,7 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
 
     genotypes = (genotypes[mask] / cov[mask][:, None] * site_weights[mask][:, None]+0.5).astype(int)
     states = {k: v[mask] for k, v in states.items()}
-    
+   
     n_sites = genotypes.shape[0]
     logger.info(f"Retained {np.sum(mask)}/{len(mask)} sites after filtering")
 
@@ -330,17 +277,19 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
     for iteration in range(max_nGenotype):
         logger.info(f"Iteration {iteration + 1}/{max_nGenotype}")
         new_beam = []
-        
+       
         for model in beam:
             accepted_genotypes = model["lineages"]
 
-            for lineage, state in states.items():
+            for idx, (lineage, state) in enumerate(states.items()):
+                if idx % 100 == 0:
+                    logger.info(f"  Evaluating lineage {idx + 1}/{len(states)}: {lineage}")
                 if lineage in accepted_genotypes:
                     continue
-                
+                # if lineage.startswith('Node') : continue
                 test_lineages = accepted_genotypes + [lineage]
 
-                results, loglik = fit_model_em(genotypes, states, test_lineages, pi_flip=pi_flip)
+                results, loglik, base_content, miss_rate = fit_model_em(genotypes, states, test_lineages, pi_flip=pi_flip)
 
                 K = len(results)
                 bic = -2 * loglik + (2 * K - 1) * np.log(n_sites)
@@ -350,6 +299,8 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
                     "results": results,
                     "loglik": loglik,
                     "bic": bic,
+                    "base_content": base_content,
+                    "miss_rate": miss_rate
                 })
         # ---------- beam pruning ----------
         new_beam.sort(key=lambda x: x["bic"])
@@ -362,109 +313,22 @@ def estimate(genotypes, states, tre, max_nGenotype, min_rate, beam_width=3, pi_f
             break
 
         beam = new_beam[:beam_width]
-    return beam[0]["results"]
-
-
-def refine_proportions_em(genotypes, states, lineages, pi_flip: float = 0.05, max_iterations: int = 100, tol: float = 1e-6):
-    """
-    EM refinement of genotype proportions with
-    genotype-specific informative site sets.
-    """
-
-    # lineages = [r[3] for r in results]
-    K = len(lineages)
-
-    results = []
-    for lineage in lineages:
-        others = [x for x in lineages if x != lineage]
-        diff_sites = identify_differentiating_sites([lineage], others, states, genotypes)
-
-        # Fit pA once per genotype (as you already do)
-        ll, pA, pR = analyze_read_support_distribution(genotypes, [lineage], others, states, diff_sites, pi_flip=pi_flip, max_iter=max_iterations, tol=tol)
-        results.append([ll, pA, pR, lineage])
-
-    p_sum = np.sum([r[1] for r in results])
-    for r in results:
-        r[1] = np.clip(r[1] / p_sum, tol, 1 - tol) if p_sum > 0 else 1.0 / K
-    return results 
-
-
-def reconstruct_genotype_sequences(bam, ref_acc, sites, best_model, min_posterior=0.9):
-    """
-    Reconstruct genotype-specific consensus sequences using
-    posterior base probabilities (no read assignment).
-    """
-
-    nG = len(best_model)
-    proportions = np.array([m[0] for m in best_model])
-    genotype_states = [np.argmax(m[3], axis=0) for m in best_model]
-
-    seqs = [{} for _ in range(nG)]
-    contig_pos = {}
-
-    p = subprocess.Popen(
-        f"{executables['samtools']} mpileup -AB -q 0 -Q 0 {bam}".split(),
-        universal_newlines=True,
-        stdout=subprocess.PIPE
-    )
-
-    for line in p.stdout:
-        p0 = line.strip().split('\t')
-        if re.split('__', p0[0])[1] != ref_acc:
-            continue
-
-        contig = p0[0]
-        pos = int(p0[1]) - 1
-
-        if contig not in contig_pos:
-            contig_pos[contig] = pos
-            for s in seqs:
-                s[contig] = []
-
-        # parse bases
-        s = re.sub(r'\^.', '', p0[4]).upper().replace('$', '')
-        s = list(''.join([b[int(n):] for n, b in re.findall(r'[+-](\d+)(.+)', '+0' + s)]))
-
-        bases, counts = np.unique(s, return_counts=True)
-        base_counts = dict(zip(bases, counts))
-        total = sum(base_counts.get(b, 0) for b in "ACGT")
-
-        if total == 0:
-            for s in seqs:
-                s[contig].append('N')
-            continue
-
-        obs = np.array([base_counts.get(b, 0) for b in "ACGT"])
-
-        # genotype-wise posterior
-        for gi in range(nG):
-            prior = np.zeros(4) + 1e-3
-            prior[genotype_states[gi][pos]] = 1.0
-
-            post = obs * prior
-            post = post / post.sum()
-
-            b = np.argmax(post)
-            if post[b] >= min_posterior:
-                seqs[gi][contig].append("ACGT"[b])
-            elif post[b] >= 0.6:
-                seqs[gi][contig].append("acgt"[b])
-            else:
-                seqs[gi][contig].append("N")
-
-    return [{k: ''.join(v) for k, v in s.items()} for s in seqs]
+    bases = beam[0]["base_content"]
+    base0 = np.zeros([bases.shape[0], mask.size, bases.shape[2]], dtype=np.float32)
+    base0[:, mask, :] = bases
+    beam[0]["base_content"] = base0
+    return beam[0]
 
 
 @click.command()
 @click.option('-d', '--resolve_db', help='resolve_db generated by build_resolveDB')
 @click.option('-q', '--query', help='query results generated by genoQuery')
-@click.option('-r', '--ref', help='reference. could be accession, tax_id, or taxonomy')
 @click.option('-o', '--outdir', help='folder storing the outputs. default: same as query', default=None)
 @click.option('-n', '--num_genotype', help='maximum number of genotypes per hits. default:10', default=10)
 @click.option('-f', '--min_freq', help='minimum frequency of a genotype. default 0.02', default=0.02)
-@click.option('-beam_width', help='beam width for beam search. default 3', default=3)
-@click.option('-p_flip', help='probability of flipping reads. default 0.05', default=0.05)
-def explore(resolve_db, query, ref, outdir, num_genotype, min_freq, beam_width, p_flip):
+@click.option('--beam_width', help='beam width for beam search. default 1', default=1)
+@click.option('--p_flip', help='probability of flipping reads. default 0.05', default=0.05)
+def explore(resolve_db, query, outdir, num_genotype, min_freq, beam_width, p_flip):
     """
     Merged strain resolution combining greedy phylogenetic approach with NMF/Lasso refinement.
     """
@@ -489,91 +353,177 @@ def explore(resolve_db, query, ref, outdir, num_genotype, min_freq, beam_width, 
     aln_fas = configure.readFasta(aln)
     configure.logging.info('Reading database.')
     if not os.path.isfile((dump_file := os.path.join(resolve_db, 'tree_info.dump'))):
-        nodes, sites, tre = get_sites(aln_fas, nwk)
-        pickle.dump([nodes, sites, tre], open(dump_file, 'wb'))
+        nodes, mut_sites, tre = get_sites(aln_fas, nwk)
+        pickle.dump([nodes, mut_sites, tre], open(dump_file, 'wb'))
     else:
-        nodes, sites, tre = pickle.load(open(dump_file, 'rb'))
+        nodes, mut_sites, tre = pickle.load(open(dump_file, 'rb'))
 
     uscgs = json.load(open(uscg))
 
     res = {'OTU':[], 'profile':[]}
 
     strains = {}
-    taxon, sites = map_qry(aln_fas, uscgs, sites)
+    taxon, all_sites = map_qry(aln_fas, uscgs)
     if taxon is None:
         logger.warning("No valid taxon found")
         json.dump(res, open(prefix + '.json', 'wt'))
         return
 
-    sites = parse_bam(bam, taxon, sites)
-    
-    genotypes = np.array([s[1] for s in sites])
-    best_model = estimate(genotypes, nodes, tre, num_genotype, min_freq, beam_width, p_flip)
-    
-    logger.info(f'Writing {len(best_model)} OTUs.')
-        
+    all_sites = parse_bam(bam, all_sites)
+   
+    sites_map = dict(all_sites)
+   
+    genotypes = np.array([sites_map.get(s[0], [0, 0, 0, 0]) for s in mut_sites])
+   
+    # best_model = json.load(open(f'{prefix}_best_model.json', 'rt'))
+    # best_model['base_content'] = np.array(best_model['base_content'], dtype=np.float32)
+    best_model = estimate(genotypes, nodes, num_genotype, min_freq, beam_width, p_flip)
+    # best_model['base_content'] = best_model['base_content'].tolist()
+    # json.dump(best_model, open(f'{prefix}_best_model.json', 'wt'))
+
+    strains = {n: [p, r, query] for p, r, n in best_model['results']}
+    # Update tree with strain placements
+    logger.info('Updating phylogenetic tree...')
+    for node in tre.iter_descendants('postorder'):
+        if node.name in strains:
+            p, r, query = strains[node.name]
+            new_node = ete3.TreeNode(name=node.name, dist=1e-8)
+            node.add_child(new_node)
+            dist = len(mut_sites)/len(all_sites) * r
+            new_node = ete3.TreeNode(name=f'{query}|{node.name}|{p:.2f}', dist=dist)
+            node.add_child(new_node)
+            node.name = ''
+    tre.write(format=1, outfile=f'{prefix}.nwk')
+    logger.info(f'Tree written to {prefix}.nwk')
+
     if len(best_model) == 0:
+        logger.warning("No strains identified")
         json.dump(res, open(prefix + '.json', 'wt'))
         return
-    elif len(best_model) <= 1:
-        m = best_model[0]
-        # Find matching OTU and update
-        for otu in uscgs['OTU']:
-            otu_copy = list(otu)
-            otu_copy[2] = m[1]
-            # Store genotype identifier
-            genotype_id = id(m[3])
-            for name, state in nodes.items():
-                if np.array_equal(state, m[3]):
-                    genotype_id = name
-                    break
-            otu_copy[4] = genotype_id
-            res['OTU'].append(otu_copy)
-    else:
-        seqs = reconstruct_genotype_sequences(bam, taxon, sites, best_model)
-        for otu in uscgs['OTU']:
-            otus = []
-            for m, seq in zip(best_model, seqs):
-                seq = {re.split('__',n)[0] + f'__{m[2]}': s for n, s in seq.items()}
-                genotype_id = id(m[3])
-                for name, state in nodes.items():
-                    if np.array_equal(state, m[3]):
-                        genotype_id = name
-                        break
-                otus.append([
-                    otu[0]*m[1], int(otu[1]*m[1]+0.5),
-                    m[2], otu[3], genotype_id, otu[5],
-                    seq])
-            res['OTU'].extend(otus)
-    
-    for i, otu in enumerate(res['OTU']):
-        if otu[4] not in strains:
-            strains[otu[4]] = []
-        strains[otu[4]].append([otu[2], int(otu[0]*1000+0.5)/1000., f'OTU{i}'])
+   
+    logger.info(f'Identified {len(best_model)} strains')
+    for i, (prop, flip_rate, lineage) in enumerate(best_model['results']):
+        logger.info(f'  Strain {i+1}: {lineage} (proportion: {prop:.3f}, flip_rate: {flip_rate:.3f})')
+   
+    logger.info('Reconstructing genotype sequences...')
+    seqs = reconstruct_genotype_sequences(all_sites, mut_sites, best_model)
+   
+    taxon_profile = [profile for profile in uscgs['profile'] if profile[3].find(taxon) > 0][0]
+    taxon_profile[4] = [f'node__{n}' for n in best_model['lineages']]
+    taxon_profile[6] = {f'concatenated__{n}':s for n, s in zip(best_model['lineages'], seqs) }
+   
+    res = {"profile": [taxon_profile], "OTU": []}
+   
+    for (p, r, n), s in zip(best_model['results'], seqs) :
+        otu = [taxon_profile[0] * p, int(taxon_profile[1] * p + 0.5),
+               100-100*r, taxon_profile[3], f'node__{n}',
+               taxon_profile[5], {f'concatenated__{n}': s}]
+        res['OTU'].append(otu)
 
+    # Save results
+    logger.info(f'Writing {len(res["OTU"])} OTUs to {prefix}.json')
     json.dump(res, open(prefix + '.json', 'wt'))
-
-    for node in tre.iter_descendants('preorder'):
-        if node.name in strains:
-            n_dist = node.dist
-            for loc, depth, name in sorted(strains[node.name]):
-                parent = node.up
-                n_dist1 = n_dist * (1-loc)
-                new0 = ete3.TreeNode(dist=node.dist - n_dist1)
-                new0.up = parent
-                new1 = ete3.TreeNode(dist=0., name=f'{name}|{node.name}_{depth}')
-
-                node.dist = n_dist1
-                node.up = new0
-                new1.up = new0
-
-                parent.remove_child(node)
-                parent.add_child(new0)
-                new0.add_child(new1)
-                new0.add_child(node)
-    
-    tre.write(format=1, outfile=f'{prefix}.nwk')
+   
     logger.info('Done.')
+
+
+
+def reconstruct_genotype_sequences(all_bases, mut_sites, best_model, min_posterior=0.75):
+    """
+    Vectorized reconstruction of genotype-specific consensus sequences.
+
+    Exhaustively evaluates all genotype-base combinations at each site
+    using multinomial likelihood + mutation uncertainty + phylogenetic prior.
+    """
+
+    BASES = np.array(['A', 'C', 'G', 'T'])
+    EPS = 1e-6
+    mut_rate = max(best_model.get('miss_rate', 0.01), 0.01)
+
+    mut_site_idx = {site: idx for idx, (site, _) in enumerate(mut_sites)}
+
+    if not best_model or not best_model.get('results'):
+        return []
+
+    nG = len(best_model['results'])
+    base_content = best_model['base_content']  # (nG, n_mut_sites, 4)
+    proportions = np.array([m[0] for m in best_model['results']])
+    proportions = proportions / proportions.sum()
+
+    logger.info(f"Vectorized reconstruction for {nG} genotypes")
+
+    L = max(site for site, _ in all_bases)
+    seqs = [np.full(L, '-', dtype='U1') for _ in range(nG)]
+
+    # ---------- precompute all base combinations ----------
+    # Shape: (n_config, nG)
+    grids = np.meshgrid(*([np.arange(4)] * nG), indexing='ij')
+    all_cfg = np.stack(grids, axis=-1).reshape(-1, nG)
+    n_cfg = all_cfg.shape[0]
+
+    # ---------- mutation noise template ----------
+    eye4 = np.eye(4)
+
+    for site, obs in all_bases:
+
+        total = sum(obs)
+
+        if total == 0:
+            continue
+
+        obs = np.array(obs, dtype=float)
+        obs_log = np.log(obs + EPS)
+
+        # ---------- expected proportions ----------
+        # exp shape: (n_cfg, 4)
+        exp = np.zeros((n_cfg, 4))
+
+        # vectorized genotype contribution
+        for g in range(nG):
+            bases = all_cfg[:, g]  # (n_cfg,)
+            exp += proportions[g] * (
+                (1 - mut_rate) * eye4[bases] + mut_rate / 3.0 * (1 - eye4[bases])
+            )
+
+        exp = np.clip(exp, EPS, None)
+        exp /= exp.sum(axis=1, keepdims=True)
+
+        # ---------- multinomial log-likelihood ----------
+        # obs dot log(exp)
+        ll = obs @ np.log(exp.T)
+
+        # ---------- phylogenetic prior ----------
+        if site in mut_site_idx:
+            idx_site = mut_site_idx[site]
+            prior = np.zeros(n_cfg)
+
+            for g in range(nG):
+                prior += np.log(np.clip(base_content[g, idx_site, all_cfg[:, g]], EPS, 1))
+            ll += prior
+
+        # ---------- choose best ----------
+        ll -= logsumexp(ll)
+        lll = np.exp(ll)
+       
+        onehot_all = eye4[all_cfg]
+        possibility = np.einsum('c,cgk->gk', lll, onehot_all)
+        best_base = np.argmax(possibility, axis=1)
+        posterior = possibility[np.arange(nG), best_base] / (possibility.sum(axis=1) + EPS)
+       
+        for g in range(nG):
+            if posterior[g] >= 0.3 :
+                if posterior[g] >= min_posterior:
+                    seqs[g][site-1] = BASES[best_base[g]]
+                else:
+                    seqs[g][site-1] = BASES[best_base[g]].lower()
+       
+    result = [''.join(s) for s in seqs]
+
+    logger.info(f"Reconstructed {len(result)} genotype sequences")
+    for i, seq in enumerate(result):
+        logger.info(f"  Genotype {i}: {len(seq)} bp")
+
+    return result
 
 
 if __name__ == '__main__':
