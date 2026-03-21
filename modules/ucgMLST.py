@@ -20,7 +20,7 @@ def query_asm(query, reference, dbname, modules, representative, outdir, num_thr
     # Create output directory if it doesn't exist
     if not os.path.isdir(outdir):
         os.makedirs(outdir)
-    
+   
     # Step 1: Prepare query file - check if gzipped, uncompress if needed
     query_fasta = os.path.join(outdir, 'query.fasta')
     if query.lower().endswith('.gz'):
@@ -30,11 +30,12 @@ def query_asm(query, reference, dbname, modules, representative, outdir, num_thr
     else:
         print(f"Copying {query} to output directory...")
         shutil.copy(query, query_fasta)
-        
+       
     # get_uscgs
     uscg_ffn, n_shared, n_specific = get_uscgs(query_fasta, reference, outdir, outdir, '', all_hits=True)
     # search closest references
-    genoQuery([uscg_ffn], dbname, modules, None, representative, outdir, 'asm20', formal_genus, formal_species, 0.5, 0.02, num_threads, 1, 3, 0.5, 3)
+    max_counts = 100000000
+    genoQuery([uscg_ffn], dbname, modules, None, representative, outdir, 'asm20', formal_genus, formal_species, 0.5, max_counts, 0.02, num_threads, 1, 3, 0.5, 3)
     print()
 
 if __name__ == '__main__' :

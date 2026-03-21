@@ -54,14 +54,14 @@ def write_seq(output, outputs, bam, min_depth=3, min_consensus=0.65):
     # Add sequences to gene matches
     for gene_match in outputs.get('gene', []):
         gene_id = gene_match[3]  # gene identifier
-        gene_match.append(seq_out.get(gene_id, {}))
+        gene_match.append(seq_out.get(gene_id[0], {}))
     
     # Add sequences to function profile
     for func_profile in outputs.get('function', []):
         gene_ids = func_profile[3]  # list of gene identifiers
         s = {}
         for gene_id in gene_ids:
-            s.update(seq_out.get(gene_id, {}))
+            s.update(seq_out.get(gene_id[0], {}))
         func_profile.append(s)
     
     json.dump(outputs, open(f'{output}/profile.json', 'wt'), indent=2)
@@ -73,16 +73,17 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
     if left_cuts is None:
         left_cuts = [0] * len(read_files)
     
-    gene_dict = { mat:genes[mat] for mat, coverage in matches }
+    gene_dict = { mats[0]:[genes[m] for m in mats] for mats, coverage in matches }
     
     # Map reads to their matched genes
     read_matches = {}
     for r in reads :
         if r[0] >= 0 :
-            if r[4] not in read_matches :
-                read_matches[r[4]] = [matches[r[0]][0]]
+            rname = r_ids[r[4]]
+            if rname not in read_matches :
+                read_matches[rname] = [matches[r[0]][0]]
             else :
-                read_matches[r[4]].append(matches[r[0]][0])
+                read_matches[rname].append(matches[r[0]][0])
     
     # Prepare results for each gene match
     results = [[] for _ in matches]
@@ -90,11 +91,14 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
     for i, (gene_name, coverage) in enumerate(matches):
         match_reads = reads[reads.T[0] == i]
         n_diffs = np.sum(match_reads.T[3]) / 100.
-        gene_id, gene_size, gn2, annotation = gene_dict[gene_name]
+        info = gene_dict[gene_name[0]]
+        gene_size = info[0][1]
+        gn2 = [i[2] for i in info]
+        annotation = sorted([i[3] for i in info])
         
         # Calculate metrics
         # RPKM-like normalization: (reads * 1000 / gene_length) * 1000000 / total_reads
-        abundance = float(match_reads.shape[0]) * 1000. / gene_size * 1000000. / n_reads if gene_size > 0 else 0
+        abundance = float(match_reads.shape[0]) * 1000. / gene_size * 1000000. / (n_reads[-1]+1) if gene_size > 0 else 0
         read_count = match_reads.shape[0]
         identity = int(100000 - 1000. * n_diffs / match_reads.shape[0] + 0.5) / 1000. if match_reads.shape[0] > 0 else 0
         
@@ -121,6 +125,7 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
     read_id = -1
     
     for fn_id, fn in enumerate(read_files):
+        max_read = n_reads[fn_id]
         if fn.lower().endswith('gz'):
             p = subprocess.Popen(f"{executables['pigz']} -cd {fn}".split(), 
                                cwd=output, stdout=subprocess.PIPE, universal_newlines=True)
@@ -133,6 +138,9 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
             for i, line in enumerate(p.stdout):
                 if i % 4 == 0:
                     read_id += 1
+                    if read_id >= max_read :
+                        read_id -= 1
+                        break
                     rn = line[1:].strip().split()[0]
                     if read_id in read_matches:
                         read_details[read_id] = [f'{rn}']
@@ -145,6 +153,9 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
             for line in p.stdout:
                 if line.startswith('>'):
                     read_id += 1
+                    if read_id >= max_read :
+                        read_id -= 1
+                        break
                     rn = line[1:].strip().split()[0]
                     if read_id in read_matches:
                         read_details[read_id] = [f'{rn}', [], '']
@@ -161,14 +172,15 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
                 read_info[1] = ''.join(read_info[1])
                 read_info[2] = 'I' * len(read_info[1])  # Dummy quality
         
-        p.communicate()
-    
+        p.terminate()
+
     # Generate SAM file
     with gzip.open(f'{output}/primary.sam.gz', 'wt') as pout:
         pout.write('@HD\tVN:1.6\tSO:unsorted\tGO:query\n')
         
         # Write gene references to SAM header
-        for gene_name, (gene_id, size, gn2, annotation) in sorted(gene_dict.items(), key=lambda x: x[1][0]):
+        for gene_name, info in sorted(gene_dict.items(), key=lambda x: x[1][0]):
+            gene_id, size, gn2, annotation = info[0]
             pout.write(f'@SQ\tSN:{gn2}\tLN:{size}\n')
         
         # Process PAF files and write alignments
@@ -180,7 +192,7 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
                 parts = line.strip().split('\t')
                 r_id = int(parts[0], 16)
                 
-                refs = read_matches.get(r_id, [])
+                refs = [r[0] for r in read_matches.get(r_id, [])]
                 if len(refs) <= 0 or parts[5] not in refs :
                     continue
                 
@@ -202,7 +214,7 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
                         cigar[0] = '{0}S'.format(int(parts[1]) - int(parts[3]))
                 
                 res = [
-                    rn, flag, f'{parts[5]}', str(int(parts[7]) + 1), 
+                    rn, flag, gene_dict[parts[5]][0][2], str(int(parts[7]) + 1), 
                     parts[11], ''.join(cigar), '*', '0', '0', rs, rq
                 ] + parts[12:-1]
                 pout.write('\t'.join(res) + '\n')
@@ -222,6 +234,8 @@ def generate_outputs(paf_files, read_files, genes, matches, reads, r_ids, output
     os.unlink(f'{output}/primary.sam.gz')
     
     return outputs, f'{output}/primary.bam'
+
+
 
 def reverse_complement(seq):
     """Return reverse complement of DNA sequence"""
@@ -257,13 +271,13 @@ def uscg2frag(read_maps, uscgs, block_size) :
 def find_cov_outlier(covs, block_size, delta_fold=3) :
     q1, q3 = np.quantile(covs.T[0], 0.25), np.quantile(covs.T[0], 0.75)
     delta_q = max(q3 - q1, 1.5/block_size)
-    idx = (covs.T[1]/covs.T[2] <= q3 + delta_fold*delta_q)
+    idx = (covs.T[1]/covs.T[2] <= q3 + delta_fold*delta_q) | ((covs.T[1]+0.5)/(covs.T[2]+0.5) <= q3 + delta_fold*delta_q)
     return idx
 
 
 def get_matches(gene_info, read_maps, allowed_distance=0.005, min_frag_match=2, delta_fold=3, block_size=300) :
     '''gfrag_id, gene_id, read_id/rfrag_id, start/read_id, end/size, mutation, diff
-        0          1       2       3                4       5        6   '''
+        0          1       2                   3                4       5        6   '''
     allowed_distance *= 10000.
     read_fragments, read_frag_idx = np.unique(read_maps[:, 1:3], axis=0, return_inverse=True)
     fragment2read = {frag_id:read for frag_id, (x, read) in enumerate(read_fragments) }
@@ -302,34 +316,38 @@ def get_matches(gene_info, read_maps, allowed_distance=0.005, min_frag_match=2, 
     coverages = [ [-1, -1, -1, gene, []] for gene in gene2.keys() ]
     
     while len(coverages) > 0 :
-        frag_cov = np.bincount(read_maps.T[0], weights=np.power(0.33333333, read_maps.T[6].astype(np.float64) / 100.), minlength=max_frag)
+        frag_cov = np.bincount(read_maps.T[0], weights=np.power(0.3333, read_maps.T[6].astype(np.float64) / 100.), minlength=max_frag)
         
-        max_i = -1
         for i, (depth, n_gene, n_frag, gene, g_cov) in enumerate(coverages) :
-            if depth == -1 or max_i < 0 or depth >= coverages[max_i][0] :
-                fragments = gene2[gene]
-            else :
-                break
-            
+            fragments = gene2[gene]
             covs = np.array([ [((frag_cov[f]+.5)/(s+.5)), frag_cov[f], s, g] \
                                   if f < frag_cov.size else [0., 0, s, g] for f, s, g in fragments ])
             idx = find_cov_outlier(covs, block_size, delta_fold)
             if len(g_cov) > 0 :
-                if np.sum((covs[idx, 1] < 0.1 * g_cov[idx]) | ((covs[idx, 1] < 0.2 * g_cov[idx]) & (covs[idx, 1] < 1))) >= 0.75 * np.sum(g_cov[idx] > 0) :
+                if np.sum((covs[idx, 1] < 0.05 * g_cov[idx]) | ((covs[idx, 1] < 0.25 * g_cov[idx]) & (covs[idx, 1] < 1))) >= 0.75 * np.sum(g_cov[idx] > 0) :
                     coverages[i] = [0, 0, 0, gene, g_cov]
+                    if gene in match_results[-1][2] :
+                        match_results[-1][0].append(gene)
                     continue
-            cov = np.sum(covs[idx, 1]) / np.sum(covs[idx, 2])
+
+            cov = np.sum(covs[idx, 1]) + 0.00001 * np.sum(covs[idx, 1]) / np.sum(covs[idx, 2])
             n_frag = covs[(covs[:, 1] >= 1.) & idx, 3].shape[0]
             n_gene = np.unique(covs[idx & (covs[:, 1] >= 1.), 3]).size
             coverages[i] = [cov, n_gene, n_frag, gene, covs.T[1] if len(g_cov) == 0 else g_cov ]
-            if (max_i < 0 or cov > coverages[max_i][0]) and \
-                (n_frag >= min_frag_match or n_frag*3 >= len(gene2[gene])) :
-                max_i = i
-        if max_i < 0 :
-            break
-        (depth, n_gene, n_frag, match, g_cov) = coverages[max_i]
-        logging.info(f'    Ref: {match} with {n_gene} USCGs. ')
+        
         coverages = [c for c in sorted(coverages, reverse=True) if c[0] > 0]
+        max_idx = []
+        for i, (depth, n_gene, n_frag, gene, g_cov) in enumerate(coverages) :
+            if (n_frag >= min_frag_match) or (n_frag*3 >= len(gene2[gene])) :
+                if len(max_idx) == 0 :
+                    max_idx = [i]
+                elif depth >= coverages[max_idx[0]][0]*0.99 :
+                    max_idx.append(i)
+
+        if len(max_idx) == 0 :
+            break
+        (depth, n_gene, n_frag, match, g_cov) = coverages[max_idx[0]]
+        logging.info(f'    Ref: {match} with {n_gene} USCGs. ')
         
         matches = read_maps[pd.Series(read_maps.T[1]) == match]
         match_covs = dict(zip(*np.unique(matches[:, 0], return_counts=True)))
@@ -338,7 +356,7 @@ def get_matches(gene_info, read_maps, allowed_distance=0.005, min_frag_match=2, 
         idx = find_cov_outlier(covs, block_size, delta_fold)
 
         # report hits
-        match_results.append([match, np.sum(covs[idx].T[1])/np.sum(covs[idx].T[2])])
+        match_results.append([[match], np.sum(covs[idx].T[1])/np.sum(covs[idx].T[2]), {coverages[i][3] for i in max_idx}])
 
         frag1, frag2 = set(gene2[match][idx, 0]), set(gene2[match][~idx, 0])
         reads_ignored = set(matches[pd.Series(matches.T[0]).isin(frag2), 2]) - set(matches[pd.Series(matches.T[0]).isin(frag1), 2])
@@ -370,7 +388,7 @@ def get_matches(gene_info, read_maps, allowed_distance=0.005, min_frag_match=2, 
     i1 = 0
     res = []
     for i0 in np.unique(summed_reads[summed_reads.T[0] >= 0, 0]) :
-        ref = match_results[i0][0]
+        ref = match_results[i0][0][0]
         x = summed_reads[summed_reads.T[0] == i0]
         n_frag = np.unique(x.T[1]).size
         n_gene = np.unique(x.T[2]).size
@@ -381,10 +399,10 @@ def get_matches(gene_info, read_maps, allowed_distance=0.005, min_frag_match=2, 
                     summed_reads[summed_reads.T[0] == i0, 0] = i1
                 i1 += 1
         else :
-            summed_reads[summed_reads.T[0] == i0, :] = [-1, 9999999, 9999999, 9999999]
+            summed_reads[summed_reads.T[0] == i0, :] = [-1, 9999999, 9999999, 9999999, 9999999]
 
     gene_map = {info[0]:g for g, info in gene_info.items()}
-    res = [[gene_map[r[0]], r[1]] for r in res]
+    res = [[[gene_map[rr] for rr in r[0]], r[1]] for r in res]
     return np.array(res, dtype=object), summed_reads
 
 
@@ -450,7 +468,8 @@ def map_to_genes(paf_files, genes, tmpdir, allowed_distance, pool) :
     return rmaps, np.array([r[0] for r in sorted(read_rename.items(), key=lambda r:r[1])])
 
 
-def read_filter(qry, tmpdir, total_reads) :
+def read_filter(qry, tmpdir, max_read_count) :
+    tot_read = -1
     left_cut = 0
     if qry.lower().endswith('q') or qry.lower().endswith('q.gz') :
         if qry.lower().endswith('q.gz') :
@@ -462,7 +481,9 @@ def read_filter(qry, tmpdir, total_reads) :
             if id > 2000000 :
                 break
             if id % 40 == 1 :
-                reads.append(list(line.strip())[:12])
+                r = list(line.strip())[:12]
+                if len(r) == 12 :
+                    reads.append(r)
         fin.close()
         reads = np.array(reads).T
         for ix in range(max(reads.shape[0], 12)) :
@@ -484,8 +505,11 @@ def read_filter(qry, tmpdir, total_reads) :
             fout = subprocess.Popen('{pigz} -c'.format(**executables).split(), stdin=subprocess.PIPE, stdout=fout2, universal_newlines=True)
             for id, line in enumerate(fin) :
                 if id % 4 == 0 :
-                    fout.stdin.write(f'@{total_reads:X}\n')
-                    total_reads += 1
+                    tot_read += 1
+                    if tot_read >= max_read_count :
+                        total_read -= 1
+                        break
+                    fout.stdin.write(f'@{tot_read:X}\n')
                 elif id % 4 == 2 :
                     fout.stdin.write(line)
                 else :
@@ -532,8 +556,11 @@ def read_filter(qry, tmpdir, total_reads) :
             fout = subprocess.Popen('{pigz} -c'.format(**executables).split(), stdin=subprocess.PIPE, stdout=fout2, universal_newlines=True)
             for line in fin :
                 if line.startswith('>') :
-                    fout.stdin.write(f'>{total_reads:X}\n')
-                    total_reads += 1
+                    tot_read += 1
+                    if tot_read >= max_read_count :
+                        total_read -= 1
+                        break
+                    fout.stdin.write(f'>{tot_read:X}\n')
                     x = 0
                 elif x == 0 :
                     fout.stdin.write(line[left_cut:])
@@ -542,16 +569,17 @@ def read_filter(qry, tmpdir, total_reads) :
                     fout.stdin.write(line)
             fout.communicate()
         fin.close()
-    return qry_file, left_cut, total_reads
+    return qry_file, left_cut, tot_read
 
 
 
-def map_reads(query, dbname, mode, tmpdir, max_dist, num_threads) :
+def map_reads(query, dbname, mode, tmpdir, max_dist, max_read_count, num_threads) :
     outputs = []
-    total_reads = 0
+    total_reads = []
     left_cuts = [0 for qry in query]
     for qid, qry in enumerate(query):
-        qry_file, left_cuts[qid], total_reads = read_filter(qry, tmpdir, total_reads)
+        qry_file, left_cuts[qid], n_read = read_filter(qry, tmpdir, max_read_count)
+        total_reads.append(n_read if qid == 0 else total_reads[-1] + n_read)
         outfile = f'{qid}.0.paf.gz'
         p_dist = 0.6 if mode == 'sr' else 0.6
 
@@ -566,10 +594,10 @@ def map_reads(query, dbname, mode, tmpdir, max_dist, num_threads) :
     return outputs, total_reads, np.array(left_cuts, dtype=np.int32)
 
 
-def query_sra(query, dbname, genes, output, mode, max_dist, min_depth, min_frag_match, min_consensus, cover_fold, pool, debug=[False, False, False, False]) :
+def query_sra(query, dbname, genes, output, mode, max_dist, max_read_count, min_depth, min_frag_match, min_consensus, cover_fold, pool, debug=[False, False, False, False]) :
     if not debug[0] :
         logging.info('Running read mapping...')
-        paf_files, n_reads, left_cuts = map_reads(query, dbname, mode, output, max_dist, len(pool._pool))
+        paf_files, n_reads, left_cuts = map_reads(query, dbname, mode, output, max_dist, max_read_count, len(pool._pool))
         # np.savez_compressed(os.path.join(output, 'uscg.npz'), n_reads=np.array(n_reads), left_cuts=left_cuts)
         logging.info('Done')
     else :
@@ -650,14 +678,15 @@ def read_gene(dbname) :
 @click.option('-t', '--num_threads', help='number of threads [Default: 16]', default=16, type=int)
 @click.option('-M', '--mode', help='One of sr [default], map-ont, map-hifi, map-pb, asm20', default='sr')
 @click.option('-D', '--max_dist', help='maximum distance of alignment [Default: 0.10 for map-ont and 0.05 for others]', default=None, type=float)
+@click.option('-N', '--max_read_count', help='maximum number of reads to process [Default: 100000000]', default=100000000, type=int)
 @click.option('-f', '--coverage_fold_diff', help='allowed coverage fold differene (relative to std) for identifying nonspecific matches. [default: 3]', default=3, type=float)
 @click.option('--min_frag_match', help='minimum fragments to call the presence of a gene. [Default: 2]', default=2, type=int)
-@click.option('--min_depth', help='minimum read depth to call a base reliably. [Default: 3]', default=None, type=int)
+@click.option('--min_depth', help='minimum read depth to call a base reliably. [Default: 3]', default=3, type=int)
 @click.option('--min_consensus', help='minimum proportion of consensus to call a base reliably [Default: 0.8]', default=0.8, type=float)
-def main(query, dbname, outdir, mode, max_dist, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff) :
-    genoEffectors(query, dbname, outdir, mode, max_dist, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff)
+def main(query, dbname, outdir, mode, max_dist, max_read_count, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff) :
+    genoEffectors(query, dbname, outdir, mode, max_dist, max_read_count, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff)
 
-def genoEffectors(query, dbname, outdir, mode, max_dist, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff) :
+def genoEffectors(query, dbname, outdir, mode, max_dist, max_read_count, num_threads, min_depth, min_frag_match, min_consensus, coverage_fold_diff) :
     if dbname == None :
         dbname = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + '/db/effectors/effectors.centroid.fas.gz'
     if max_dist == None :
@@ -673,7 +702,7 @@ def genoEffectors(query, dbname, outdir, mode, max_dist, num_threads, min_depth,
         os.makedirs(outdir)
 
     logging.info('Done')
-    query_sra(query, dbname, genes, outdir, mode, max_dist, min_depth, min_frag_match, min_consensus, coverage_fold_diff, pool)
+    query_sra(query, dbname, genes, outdir, mode, max_dist, max_read_count, min_depth, min_frag_match, min_consensus, coverage_fold_diff, pool)
 
 
 

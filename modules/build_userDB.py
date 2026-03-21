@@ -35,21 +35,21 @@ def compare_with_existing(output_dir, user_genomes, existing_db, module, threads
     tag = os.path.basename(output_dir)
     # Create list file for user genomes
     existing_metadata = pd.read_feather(os.path.join(existing_db, module, f'{module}.db'))
-    user_metadata = {os.path.basename(genome):{'accession': os.path.basename(genome), 'genome_path': genome, 
+    user_metadata = {os.path.basename(genome):{'accession': os.path.basename(genome), 'genome_path': genome,
                         'score':-idx, 'species_taxid':0, 'taxonomy': f'ANI95_{os.path.basename(genome)}',
-                        'organism_name': os.path.basename(genome), 'status': 'DOWNLOADED', 
-                        'ANI90': os.path.basename(genome), 'ANI95': os.path.basename(genome), 'ANI98': os.path.basename(genome), 'ANI99': os.path.basename(genome), 
+                        'organism_name': os.path.basename(genome), 'status': 'DOWNLOADED',
+                        'ANI90': os.path.basename(genome), 'ANI95': os.path.basename(genome), 'ANI98': os.path.basename(genome), 'ANI99': os.path.basename(genome),
                         'USCG_shared': 0, 'USCG_specific': 0, 'best_hit':['', 0, 0]} for idx, genome in enumerate(user_genomes)}
     user_list = os.path.join(output_dir, f'{tag}.files')
     with open(user_list, 'wt') as fout:
         for genome in user_genomes:
             fout.write(f'{genome}\n')
-    
+   
     # Sketch user genomes
     user_sketch = os.path.join(output_dir, f'{tag}.sketch')
     cmd = f'{bindash} sketch --nthreads={threads} --listfname={user_list} --kmerlen=21 --sketchsize64=160 --outfname={user_sketch}'
     subprocess.Popen(cmd.split()).communicate()
-    
+   
     # Compare with existing database
     existing_sketch = os.path.join(existing_db, module, f'{module}.sketch')
     dist_file = os.path.join(output_dir, f'{tag}.dist')
@@ -65,10 +65,10 @@ def compare_with_existing(output_dir, user_genomes, existing_db, module, threads
             ani = 100 - row[2]*100
             if user_metadata[query]['best_hit'][0] == '' or user_metadata[query]['best_hit'][1] < ani :
                 user_metadata[query]['best_hit'] = [sbj, ani, 0]
-    
+   
     cmd = f'{bindash} dist --nthreads={threads} --mthres=0.15 --outfname={dist_file} {user_sketch} {existing_sketch}'
     subprocess.Popen(cmd.split()).communicate()
-    
+   
     dist_data = pd.read_csv(dist_file, sep='\t', header=None)
     for row in dist_data.values:
         query = os.path.basename(row[0])
@@ -88,7 +88,7 @@ def compare_with_existing(output_dir, user_genomes, existing_db, module, threads
             if ani >= 95 :
                 user_metadata[query]['ANI95'] = match['ANI95']
                 user_metadata[query]['taxonomy'] = match['taxonomy']
-                if ani >= 98 : 
+                if ani >= 98 :
                     user_metadata[query]['ANI98'] = match['ANI98']
                     if ani >= 99 :
                         user_metadata[query]['ANI99'] = match['ANI99']
@@ -114,7 +114,7 @@ def rc(seq):
 def detranseq(d, orf_coords):
     s, e = orf_coords[d[0]]
     d[0] = d[0].rsplit('_', 1)[0]
-    
+   
     if s < e:
         d[3], d[4] = s + (d[3]-1)*3, s + (d[4]*3 - 1)
         d[7] = 1
@@ -150,7 +150,7 @@ def parseHits(data, c):
                     break
         if not ingroup:
             outputs.append([d])
-    
+   
     o2 = []
     for dat in outputs:
         score = 0
@@ -166,9 +166,9 @@ def parseHits(data, c):
 
 def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
     outfile = f'{acc}.USCGs.ffn'
-    
+   
     subprocess.Popen('{getorf} -table 4 -minsize 100 -sequence {0} -nomethionine -outseq {1}'.format(
-        query, os.path.join(dirname, f'{acc}.aa'), **executables).split(), 
+        query, os.path.join(dirname, f'{acc}.aa'), **executables).split(),
         stderr=subprocess.PIPE).communicate()
 
     orf_coords = {}
@@ -181,7 +181,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
     dataset = []
     cutoffs, toMerge = {}, {}
     hmms = {}
-    
+   
     with open(os.path.join(dbname, 'ortho_group')) as fin:
         for line in fin:
             p0, p1 = line.strip().split()
@@ -200,7 +200,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
         for line in fin:
             p = line.strip().split()
             cutoffs[p[0]] = [float(p[1]), 0, 0]
-    
+   
     with open(os.path.join(dbname, 'lengths_cutoff')) as fin:
         for line in fin:
             p = line.strip().split()
@@ -213,7 +213,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
             hmm, os.path.join(dirname, f'{acc}.aa'), os.path.join(dirname, f'{acc}.hmm'),
             cutoffs[key][0]*0.4, 2, **executables
         ).split(), stdout=subprocess.PIPE).communicate()
-        
+       
         with open(os.path.join(dirname, f'{acc}.hmm')) as fin:
             for line in fin:
                 if line.startswith('#'):
@@ -222,7 +222,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
                 d = [p[0], toMerge.get(p[3], p[3]), float(p[21]), int(p[17]), int(p[18]),
                      int(p[15]), int(p[16]), float(p[12]), float(p[13]), int(p[2]), int(p[5])]
                 data.append(detranseq(d, orf_coords))
-        
+       
         if len(data):
             dataset.extend(parseHits(data, cutoffs[key]))
 
@@ -251,12 +251,12 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
                 else:
                     d1[0][0] = ''
                     break
-    
+   
     dataset = sorted([d for d in dataset if d[0][0] != ''], key=lambda x:[x[0][1], x[0][0], x[0][3]])
 
     sequences = readFasta(query)
     ids = {}
-    
+   
     with open(os.path.join(dirname, outfile), 'wt') as ffn_out:
         for data in dataset:
             s = sequences[data[0][0]][data[0][3]-1:data[-1][4]]
@@ -267,7 +267,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
             coding = ','.join([f'{d[3] - data[0][3]+1}-{d[4] - data[0][3]+1}' for d in data]) if data[0][7] > 0 \
                 else ','.join([f'{data[-1][4]-d[4]+1}-{data[-1][4]-d[3]+1}' for d in data[::-1]])
             ffn_out.write(f'>{n} {data[0][0]} {data[0][3]} {data[-1][4]} {data[0][7]} {coding}\n{s}\n')
-    
+   
     return os.path.abspath(os.path.join(dirname, outfile)), \
            np.sum([hmms[hmm][1] != 1 for hmm, cnt in ids.items() if cnt == 1 or all_hits], dtype=int), \
            np.sum([hmms[hmm][1] for hmm, cnt in ids.items() if cnt == 1 or all_hits], dtype=int)
@@ -275,7 +275,7 @@ def get_uscgs(query, dbname, acc, dirname, domain, all_hits=False):
 def prepare_uscg(in_fna, db, acc, tmpdir, domain, all_hits=False):
     if in_fna.lower().endswith('.gz'):
         subprocess.Popen('{gzip} -cd {0} > {1}'.format(
-            in_fna, os.path.join(tmpdir, f'{acc}.fna'), **executables), 
+            in_fna, os.path.join(tmpdir, f'{acc}.fna'), **executables),
             shell=True).communicate()
         in_fna = os.path.join(tmpdir, f'{acc}.fna')
 
@@ -312,7 +312,7 @@ def check_uscgs(fname, dbname, domain, all_hits=False) :
             if domain in p1 :
                 fn = os.path.join(dbname, 'hmms', f'{p0}.hmm')
                 hmms[p0] = [fn, 1] if domain == p1 else [fn, 0]
-    
+   
     genome_profile = {}
     with gzip.open(fname, 'rt') as fin :
         for line in fin :
@@ -322,7 +322,7 @@ def check_uscgs(fname, dbname, domain, all_hits=False) :
                 g1 = toMerge.get(g1, g1)
                 if g1 not in hmms :
                     continue
-                
+               
                 genome_profile[g1] = genome_profile.get(g1, []) + [[line]]
             elif g1 in hmms :
                 genome_profile[g1][-1].append(line)
@@ -360,9 +360,9 @@ def process_user_genome(data):
                             fout.write(line)
                 fin.close()
                 fas = f2
-            
+           
             subprocess.Popen('{gzip} -c {0} > {1}'.format(fas, output, **executables), shell=True).communicate()
-    
+   
     return acc, output, n_uscg, n_specific
 
 # ============================================================================
@@ -381,29 +381,29 @@ def process_user_genome(data):
 @click.option('-p', '--representative', help='ANI99 [default], ANI98, ANI95, or ANI90', default='ANI99,ANI98')
 @click.option('--min_uscg', help='Minimum number of USCGs for QC [default: 60]', default=60, type=int)
 @click.option('--n_proc', help='Number of parallel processes [default: 10]', default=10, type=int)
-def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_reference, 
+def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_reference,
                            domain, cutoff, threads, representative, min_uscg, n_proc):
     """
-    Process user assemblies: compare with existing database, extract USCGs, 
+    Process user assemblies: compare with existing database, extract USCGs,
     and build a temporary database in the same structure.
     """
     pool = Pool(n_proc)
-    
+   
     # Read user assembly paths
     representatives = sorted(representative.split(','), reverse=True)
     with open(input_list, 'rt') as fin:
         user_genomes = [os.path.abspath(line.strip()) for line in fin if line.strip()]
-    
+   
     logging.info(f'Loaded {len(user_genomes)} user assemblies')
-    
+   
     # Create output directory
     makedirs(output_dir)
     output_dir = os.path.abspath(output_dir)
     tag = os.path.basename(output_dir)
-    
+   
     # Step 1: Compare with existing database
     logging.info('Comparing user assemblies with existing database...')
-    
+   
     user_metadata = compare_with_existing(output_dir, user_genomes, existing_db, module, threads, cutoff)
     # user_metadata.to_feather(os.path.join(output_dir, f'{tag}.db'))
     # user_metadata.to_csv(os.path.join(output_dir, f'{tag}.csv'))
@@ -413,21 +413,21 @@ def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_re
     logging.info('Extracting USCGs from user assemblies...')
     uscg_dir = os.path.join(output_dir, 'uscgs')
     makedirs(uscg_dir)
-    
+   
     process_data = [[accession, path, uscg_reference, uscg_dir, domain] for accession, path in user_metadata.loc[user_metadata['accession'].isin(user_metadata[representatives].values.ravel()), ['accession', 'genome_path']].values]
-    
+   
     with open(os.path.join(output_dir, 'uscg_extraction.log'), 'wt') as fout:
         for idx, (acc, output, n_shared, n_specific) in enumerate(pool.imap_unordered(process_user_genome, process_data)):
-            
+           
             if idx % 10 == 0:
                 logging.info(f'Processed {idx}/{len(process_data)} genomes for USCG extraction')
-            
+           
             fout.write(f'{acc}\t{output}\t{n_shared}\t{n_specific}\n')
             user_metadata.loc[user_metadata['accession'] == acc, ['USCG_shared', 'USCG_specific']] = n_shared, n_specific
-    
+   
     pool.close()
     pool.join()
-    
+   
     # Step 3: Build USCG profiles
     logging.info('Building USCG profiles...')
     for representative in representatives :
@@ -435,12 +435,12 @@ def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_re
         with gzip.open(allele_file, 'wt') as allele_out:
             profiles = {}
             alleles = {}
-            
+           
             for idx, row in user_metadata.loc[user_metadata['accession'] == user_metadata[representative]].iterrows() :
                 acc = row['accession']
                 n_shared = row['USCG_shared']
                 n_specific = row['USCG_specific']
-                
+               
                 if domain not in ('virus', 'viral'):
                     if n_shared + n_specific >= min_uscg:
                         output = os.path.join(uscg_dir, f'{acc}.USCGs.ffn.gz')
@@ -453,7 +453,7 @@ def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_re
         # Step 4: Index alleles for mapping
         logging.info('Indexing alleles...')
         allele_uncompressed = allele_file.replace('.gz', '')
-        
+       
         cmds = [
             f"{{pigz}} -cd {allele_file} > {allele_uncompressed}".format(**executables),
             f"{{samtools}} faidx {allele_uncompressed}".format(**executables),
@@ -462,16 +462,16 @@ def process_user_assemblies(input_list, existing_db, module, output_dir, uscg_re
         ]
         for cmd in cmds:
             subprocess.Popen(cmd, shell=True).communicate()
-    
+   
     # Save profiles
     with gzip.open(os.path.join(output_dir, f'{tag}.USCGs.profile.gz'), 'wt') as fout:
         json.dump(profiles, fout)
-    
-    
+   
+   
     # Step 5: Save metadata
     user_metadata.to_feather(os.path.join(output_dir, f'{tag}.db'))
     user_metadata.to_csv(os.path.join(output_dir, f'{tag}.csv'), index=False)
-    
+   
     logging.info('User database created successfully!')
     logging.info(f'Output directory: {output_dir}')
 

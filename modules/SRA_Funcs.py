@@ -54,7 +54,7 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
         
         species, taxonomy = get_taxonomy(metadata, match[0])
 
-        results[i] = [float(match_reads.shape[0])*1000./sum([ s for g, s in genome_info[match[0]]])*1000000./n_reads,
+        results[i] = [float(match_reads.shape[0])*1000./sum([ s for g, s in genome_info[match[0]]])*1000000./n_reads[-1],
                       match_reads.shape[0],
                       int(100000 - 1000.*n_diffs/match_reads.shape[0]+0.5)/1000.,
                       species[0] + ('' if len(species) == 1 else ' ({0})'.format(','.join(species[1:]))),
@@ -71,10 +71,11 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
 
     outputs = {'profile':sorted(species_res.values(), reverse=True), 'OTU':sorted(results, reverse=True)}
     json.dump(outputs, open(f'{tmpdir}/profile.json', 'wt'))
-    
+    pause()
     read_details = {}
     read_id = -1
     for fn_id, fn in enumerate(read_files) :
+        max_read = n_reads[fn_id]
         if fn.lower().endswith('gz') :
             p = subprocess.Popen(f"{executables['pigz']} -cd {fn}".split(), cwd=tmpdir, stdout=subprocess.PIPE, universal_newlines=True)
         else :
@@ -84,6 +85,9 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
             for i, line in enumerate(p.stdout) :
                 if i % 4 == 0 :
                     read_id += 1
+                    if read_id > max_read :
+                        read_id -= 1
+                        break
                     rn = line[1:].strip().split()[0]
                     if read_id in read_matches :
                         ref = read_matches[read_id]
@@ -96,6 +100,9 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
             for line in p.stdout :
                 if line.startswith('>') :
                     read_id += 1
+                    if read_id > max_read :
+                        read_id -= 1
+                        break
                     rn = line[1:].strip().split()[0]
                     if read_id in read_matches :
                         ref = read_matches[read_id]
@@ -110,7 +117,9 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
             for read_id, read_info in read_details.items() :
                 read_info[1] = ''.join(read_info[1])
                 read_info[2] = 'Q' * len(read_info[1])
-        p.communicate()
+        p.terminate()
+
+    pause()
 
     with gzip.open(f'{tmpdir}/primary.sam.gz', 'wt') as pout :
         pout.write('@HD\tVN:1.6\tSO:unsorted\tGO:query\n')
@@ -150,9 +159,14 @@ def generate_outputs(paf_files, read_files, metadata, matches, reads, r_ids, tmp
     subprocess.Popen(f"{executables['pigz']} -cd {tmpdir}/primary.sam.gz | {executables['samtools']} sort -m 4G -@ 8 -O bam -l 0 -T {tmpdir}/tmp - > {tmpdir}/primary.bam", 
                      shell=True).communicate()
 
+    pause()
+
     os.unlink(f'{tmpdir}/primary.sam.gz')
     return outputs, f'{tmpdir}/primary.bam'
 
+
+def pause() :
+    print()
 
 
 def write_seq(output, outputs, bam, min_depth=3, min_consensus=0.65) :
