@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, gzip, click, re, json
 import subprocess, tempfile
 import numpy as np, pandas as pd

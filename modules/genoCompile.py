@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import sys, os, numpy as np, click, tempfile, subprocess, re, gzip
 try :
     import ujson as json

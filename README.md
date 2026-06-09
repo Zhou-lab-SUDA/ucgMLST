@@ -79,22 +79,31 @@ pyarrow  # for feather format support
 
 ### Setup
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/ucgMLST.git
+# 1. Clone the repository:
+
+INSTALL_DIR=/path/to/install
+cd INSTALL_DIR
+git clone https://github.com/Zhou-lab-SUDA/ucgMLST.git
 cd ucgMLST
-```
+chmod +x modules/*.py
 
-2. Install Python dependencies:
-```bash
-pip install numpy pandas click ete3 pyarrow
-```
+# 2. Install dependencies with conda:
 
-3. Download and place external tools in the `externals/` directory or ensure they are available in your system PATH.
+conda env create -n ucgMLST -f environment.yaml
+# or use micromamba
+# micromamba create -n ucgMLST -f environment.yaml
 
-4. Verify installation:
-```bash
-python configure.py
+conda activate ucgMLST
+
+# 3. check install
+python $INSTALL_DIR/ucgMLST/modules/genoQuery.py --help
+
+# or add $INSTALL_DIR/ucgMLST/modules to $PATH
+# paste the following  `export` to ~/.bashrc
+export PATH=$INSTALL_DIR/ucgMLST/modules:$PATH
+genoQuery.py --help
+
 ```
 
 ## Quick Start
