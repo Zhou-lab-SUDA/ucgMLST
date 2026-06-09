@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, click, gzip, glob, json, numpy as np, ete3, pandas as pd, _collections
 import subprocess, tempfile, re
 from multiprocessing import Pool

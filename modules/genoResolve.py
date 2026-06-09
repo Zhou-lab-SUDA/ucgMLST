@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os, ete3, numpy as np, subprocess, click, tempfile, pickle, json, re
 import configure
 from scipy.special import gammaln, xlogy, logsumexp

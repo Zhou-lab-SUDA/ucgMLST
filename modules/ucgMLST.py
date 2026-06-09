@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import click, os, gzip, shutil
 from build_ucgDB import get_uscgs
 from genoQuery import genoQuery
